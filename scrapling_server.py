@@ -79,6 +79,90 @@ def clean_html(html: str, max_chars=12000) -> str:
 def health():
     return {"status": "ok", "version": "2.0.0"}
 
+@app.post("/search-linkedin-companies")
+def search_linkedin_companies(req: MapsRequest):
+    niche    = req.query.strip()
+    location = req.location.strip()
+    max_r    = req.max_results
+    location_part = f'"{location}"' if location else ""
+    query_google  = f'site:linkedin.com/company {niche} {location_part}'
+    query_ddg     = f'site:linkedin.com/company "{niche}" {location_part}'
+    results = []
+
+    def parse_company_results(page, source):
+        found = []
+        selectors = [
+            ("div.g a", "h3"), ("div.tF2Cxc a", "h3"),
+            ("li.b_algo h2 a", None), (".result__title a", None),
+            ("a[href*='linkedin.com/company']", None),
+        ]
+        for anchor_sel, title_sel in selectors:
+            try:
+                anchors = page.css(anchor_sel)
+                if not anchors: continue
+                for anchor in anchors:
+                    href = anchor.attrib.get("href", "")
+                    if "/url?q=" in href:
+                        import urllib.parse
+                        parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                        href = parsed.get("q", [href])[0]
+                    if "uddg=" in href:
+                        from urllib.parse import parse_qs, urlparse, unquote
+                        try:
+                            params = parse_qs(urlparse(href).query)
+                            href = unquote(params.get("uddg", [href])[0])
+                        except: pass
+                    if "linkedin.com/company/" not in href: continue
+                    if title_sel:
+                        title_el = anchor.css(title_sel)
+                        name = title_el.css("::text").get() if title_el else (anchor.css("::text").get() or "")
+                    else:
+                        name = anchor.css("::text").get() or ""
+                    import re as _re
+                    name = _re.sub(r"\s*[|·\-]s\*(LinkedIn|Company).*$", "", name, flags=_re.I).strip()
+                    if not name or len(name) < 2: continue
+                    website = ""
+                    try:
+                        parent = anchor
+                        for _ in range(5):
+                            parent = parent.parent
+                            texts = " ".join(parent.css("::text").getall())
+                            url_m = _re.search(r"https?://(?!linkedin)[^\s]+", texts)
+                            if url_m:
+                                website = url_m.group(0).rstrip(".,)")
+                                break
+                    except: pass
+                    found.append({"name": name, "linkedin_url": href, "website": website, "source": source})
+            if found: break
+            except Exception as e:
+                log.debug(f"Selector {anchor_sel} falló: {e}")
+        return found
+
+    for (url_f, source_name) in [
+        (f"https://www.google.com/search?q={quote(query_google)}&num=20&hl=es&gl=pe", "google"),
+        (f"https://html.duckduckgo.com/html/?q={quote(query_ddg)}&kl=es-es", "duckduckgo"),
+        (f"https://www.bing.com/search?q={quote(query_ddg)}&count=20&setlang=es", "bing"),
+    ]:
+        if len(results) >= max_r: break
+        try:
+            log.info(f"LinkedIn Companies [{source_name}]: '{niche}' en '{location}'")
+            with FetcherSession(impersonate="chrome") as session:
+                page = session.get(url_f, stealthy_headers=True)
+            results += parse_company_results(page, source_name)
+        except Exception as e:
+            log.warning(f"{source_name} falló: {e}")
+
+    seen, clean = set(), []
+    for r in results:
+        key = r.get("linkedin_url") or r.get("name")
+        if key and key not in seen and r.get("name"):
+            seen.add(key); clean.append(r)
+
+    log.info(f"LinkedIn Companies total: {len(clean)} para '{niche}'")
+    if not clean:
+        raise HTTPException(status_code=404, detail=f"No se encontraron empresas en LinkedIn para: {niche} {location}")
+    return {"results": clean[:max_r], "total": len(clean)}
+
 @app.post("/search-google-maps")
 def search_google_maps(req: MapsRequest):
     query = req.query if req.location in req.query else f"{req.query} {req.location}".strip()
@@ -91,7 +175,6 @@ def search_google_maps(req: MapsRequest):
         for card in page.css("li.b_algo"):
             name = card.css("h2 a::text").get() or ""
             href = (card.css("h2 a").get() or card.css("cite::text").get() or "")
-            snippet = card.css(".b_caption p::text").get() or ""
             website = ""
             if href and href.startswith("http") and "bing.com" not in href:
                 website = href
@@ -155,98 +238,45 @@ def search_linkedin(req: LinkedInRequest):
     query_ddg = f'site:linkedin.com/in "{company}" CEO OR Director OR Founder{location_part}'
 
     def parse_results(page, source_name):
-        selectors = [
-            ("div.g a", "h3"),
-            ("div.tF2Cxc a", "h3"),
-            ("li.b_algo h2 a", None),
-            (".result__title a", None),
-            ("a[href*='linkedin.com/in']", None),
-        ]
-        for anchor_sel, title_sel in selectors:
+        selectors = [("div.g a", "h3"),("div.tF2Cxc a","h3"),("li.b_algo h2 a",None),(".result__title a",None),("a[href*='linkedin.com/in']",None)]
+        for anchor_sel,title_sel in selectors:
             try:
-                anchors = page.css(anchor_sel)
+                anchors=page.css(anchor_sel)
                 if not anchors: continue
                 for anchor in anchors:
-                    href = anchor.attrib.get("href", "")
+                    href=anchor.attrib.get("href","")
                     if "/url?q=" in href:
-                        import urllib.parse
-                        parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
-                        href = parsed.get("q", [href])[0]
+                        import urllib.parse; parsed=urllib.parse.parse_qs(urllib.parse.urlparse(href).query); href=parsed.get("q",[href])[0]
+                    if "uddg=" in href:
+                        from urllib.parse import parse_qs,urlparse,unquote
+                        try: params=parse_qs(urlparse(href).query); href=unquote(params.get("uddg",[href])[0])
+                        except: pass
                     if "linkedin.com/in/" not in href: continue
                     if title_sel:
-                        title_el = anchor.css(title_sel)
-                        title_text = title_el.css("::text").get() if title_el else (anchor.css("::text").get() or "")
-                    else:
-                        title_text = anchor.css("::text").get() or ""
-                    name, title = extract_from_title(title_text)
+                        title_el=anchor.css(title_sel); title_text=title_el.css("::text").get() if title_el else(anchor.css("::text").get() or"")
+                    else: title_text=anchor.css("::text").get() or""
+                    name,title=extract_from_title(title_text)
                     if name:
                         log.info(f"✅ LinkedIn ({source_name}): {name} | {title}")
-                        return {"person_name": name, "person_title": title, "linkedin_url": href, "source": source_name}
-                    parent = anchor
+                        return {"person_name": name,"person_title": title,"linkedin_url": href,"source": source_name}
+                    parent=anchor
                     for _ in range(4):
-                        try:
-                            parent = parent.parent
-                            full_text = " ".join(parent.css("::text").getall())
-                            name, title = extract_from_snippet(full_text)
-                            if name:
-                                log.info(f"✅ LinkedIn snippet ({source_name}): {name} | {title}")
-                                return {"person_name": name, "person_title": title, "linkedin_url": href, "source": f"{source_name}_snippet"}
+                        try: parent=parent.parent; full_text=" ".join(parent.css("::text").getall()); name,title=extract_from_snippet(full_text)
+                        if name:
+                            log.info(f"✅ LinkedIn snippet ({source_name}): {name} | {title}")
+                            return {"person_name": name,"person_title": title,"linkedin_url": href,"source": f"{source_name}_snippet"}
                         except: break
-            except Exception as e:
-                log.debug(f"Selector {anchor_sel} falló: {e}")
+            except Exception as e: log.debug(f"Selector {anchor_sel} falló: {e}")
         return None
 
-    try:
-        google_url = f"https://www.google.com/search?q={quote(query_google)}&num=10&hl=es&gl=pe"
-        log.info(f"🔍 Google LinkedIn search: '{company}'")
-        with FetcherSession(impersonate="chrome") as session:
-            page = session.get(google_url, stealthy_headers=True)
-        result = parse_results(page, "google")
-        if result: return result
-    except Exception as e:
-        log.warning(f"Google search falló: {e}")
-
-    try:
-        ddg_url = f"https://html.duckduckgo.com/html/?q={quote(query_ddg)}&kl=es-es"
-        log.info(f"🦆 DuckDuckGo LinkedIn search: '{company}'")
-        with FetcherSession(impersonate="chrome") as session:
-            page = session.get(ddg_url, stealthy_headers=True)
-        for result_div in page.css(".result, .web-result"):
-            title_el = result_div.css(".result__title a, .result__a")
-            if not title_el: continue
-            href = title_el.attrib.get("href", "")
-            title_text = title_el.css("::text").get() or ""
-            if "//duckduckgo.com/l/?" in href or "uddg=" in href:
-                from urllib.parse import parse_qs, urlparse, unquote
-                try:
-                    params = parse_qs(urlparse(href).query)
-                    href = unquote(params.get("uddg", [href])[0])
-                except: pass
-            if "linkedin.com/in/" not in href: continue
-            name, title = extract_from_title(title_text)
-            if not name:
-                snippet = result_div.css(".result__snippet::text").get() or ""
-                name, title = extract_from_snippet(snippet)
-            if name:
-                log.info(f"✅ LinkedIn (DuckDuckGo): {name} | {title}")
-                return {"person_name": name, "person_title": title, "linkedin_url": href, "source": "duckduckgo"}
-    except Exception as e:
-        log.warning(f"DuckDuckGo search falló: {e}")
-
-    try:
-        role_q_bing = " OR ".join(f'"{r~�' for r in DECISION_MAKER_ROLES[:8])
-        bing_query = f'site:linkedin.com/in "{company}" ({role_q_bing}){location_part}'
-        bing_url = f"https://www.bing.com/search?q={quote(bing_query)}&count=10&setlang=es"
-        log.info(f"🔷 Bing LinkedIn search: '{company}'")
-        with FetcherSession(impersonate="chrome") as session:
-            page = session.get(bing_url, stealthy_headers=True)
-        result = parse_results(page, "bing")
-        if result: return result
-    except Exception as e:
-        log.warning(f"Bing search falló: {e}")
-
+    for(url_f,source_n) in [(f"https://www.google.com/search?q={quote(query_google)}&num=10&hl=es&gl=pe","google"),(f"https://html.duckduckgo.com/html/?q={quote(query_ddg)}&kl=es-es","duckduckgo"),(f"https://www.bing.com/search?q={quote(' '.join(f'\"{rs}\"' for rs in DECISION_MAKER_ROLESY��]))}&count=10&setlang=es","bing")]:
+        try:
+            with FetcherSession(impersonate="chrome") as session: page=session.get(url_f,stealthy_headers=True)
+            result=parse_results(page,source_n)
+            if result: return result
+        except Exception as e: log.warning(f"{source_n} falló: {e}")
     log.info(f"❌ No encontrado para '{company}'")
-    return {"person_name": "NOT_FOUND", "person_title": "", "linkedin_url": "", "source": "not_found"}
+    return {"person_name":"NOT_FOUND","person_title":"","linkedin_url":"","source":"not_found"}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8765, log_level="info")
+    uvicorn.run(app,host="0.0.0.0",port=8765,log_level="info")
