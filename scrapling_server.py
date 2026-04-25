@@ -148,30 +148,104 @@ def search_linkedin(req: LinkedInRequest):
     company = req.company.strip()
     if not company or company in {"NO_COMPANY_FOUND", "NOT_FOUND", ""}:
         return {"person_name": "NOT_FOUND", "person_title": "", "linkedin_url": "", "source": "no_company"}
-    role_q = " OR ".join(f'"{r}"' for r in DECISION_MAKER_ROLES[:8])
-    query = f'site:linkedin.com/in "{company}" ({role_q})'
-    if req.location: query += f' "{req.location}"'
-    search_url = f"https://www.bing.com/search?q={quote(query)}&count=10&setlang=es"
-    log.info(f"LinkedIn search: '{company}'")
+    location = req.location.strip()
+    role_q = '"CEO" OR "Founder" OR "Co-Founder" OR "Director General" OR "Director" OR "Gerente General" OR "Gerente" OR "Owner" OR "Presidente" OR "CTO" OR "COO"'
+    location_part = f' "{location}"' if location else ""
+    query_google = f'site:linkedin.com/in "{company}" ({role_q}){location_part}'
+    query_ddg = f'site:linkedin.com/in "{company}" CEO OR Director OR Founder{location_part}'
+
+    def parse_results(page, source_name):
+        selectors = [
+            ("div.g a", "h3"),
+            ("div.tF2Cxc a", "h3"),
+            ("li.b_algo h2 a", None),
+            (".result__title a", None),
+            ("a[href*='linkedin.com/in']", None),
+        ]
+        for anchor_sel, title_sel in selectors:
+            try:
+                anchors = page.css(anchor_sel)
+                if not anchors: continue
+                for anchor in anchors:
+                    href = anchor.attrib.get("href", "")
+                    if "/url?q=" in href:
+                        import urllib.parse
+                        parsed = urllib.parse.parse_qs(urllib.parse.urlparse(href).query)
+                        href = parsed.get("q", [href])[0]
+                    if "linkedin.com/in/" not in href: continue
+                    if title_sel:
+                        title_el = anchor.css(title_sel)
+                        title_text = title_el.css("::text").get() if title_el else (anchor.css("::text").get() or "")
+                    else:
+                        title_text = anchor.css("::text").get() or ""
+                    name, title = extract_from_title(title_text)
+                    if name:
+                        log.info(f"✅ LinkedIn ({source_name}): {name} | {title}")
+                        return {"person_name": name, "person_title": title, "linkedin_url": href, "source": source_name}
+                    parent = anchor
+                    for _ in range(4):
+                        try:
+                            parent = parent.parent
+                            full_text = " ".join(parent.css("::text").getall())
+                            name, title = extract_from_snippet(full_text)
+                            if name:
+                                log.info(f"✅ LinkedIn snippet ({source_name}): {name} | {title}")
+                                return {"person_name": name, "person_title": title, "linkedin_url": href, "source": f"{source_name}_snippet"}
+                        except: break
+            except Exception as e:
+                log.debug(f"Selector {anchor_sel} falló: {e}")
+        return None
+
     try:
+        google_url = f"https://www.google.com/search?q={quote(query_google)}&num=10&hl=es&gl=pe"
+        log.info(f"🔍 Google LinkedIn search: '{company}'")
         with FetcherSession(impersonate="chrome") as session:
-            page = session.get(search_url, stealthy_headers=True)
-        for anchor in page.css("li.b_algo h2 a"):
-            title_text = anchor.css("::text").get() or ""
-            href = anchor.attrib.get("href", "")
+            page = session.get(google_url, stealthy_headers=True)
+        result = parse_results(page, "google")
+        if result: return result
+    except Exception as e:
+        log.warning(f"Google search falló: {e}")
+
+    try:
+        ddg_url = f"https://html.duckduckgo.com/html/?q={quote(query_ddg)}&kl=es-es"
+        log.info(f"🦆 DuckDuckGo LinkedIn search: '{company}'")
+        with FetcherSession(impersonate="chrome") as session:
+            page = session.get(ddg_url, stealthy_headers=True)
+        for result_div in page.css(".result, .web-result"):
+            title_el = result_div.css(".result__title a, .result__a")
+            if not title_el: continue
+            href = title_el.attrib.get("href", "")
+            title_text = title_el.css("::text").get() or ""
+            if "//duckduckgo.com/l/?" in href or "uddg=" in href:
+                from urllib.parse import parse_qs, urlparse, unquote
+                try:
+                    params = parse_qs(urlparse(href).query)
+                    href = unquote(params.get("uddg", [href])[0])
+                except: pass
             if "linkedin.com/in/" not in href: continue
             name, title = extract_from_title(title_text)
-            if name: return {"person_name": name, "person_title": title, "linkedin_url": href, "source": "linkedin_title"}
-        anchors_all = page.css("li.b_algo h2 a")
-        for i, snip_el in enumerate(page.css("li.b_algo .b_caption p")):
-            snippet = snip_el.css("::text").get() or ""
-            try: href = anchors_all[i].attrib.get("href", "") if i < len(anchors_all) else ""
-            except: href = ""
-            if "linkedin.com" not in href and "linkedin.com" not in snippet: continue
-            name, title = extract_from_snippet(snippet)
-            if name: return {"person_name": name, "person_title": title, "linkedin_url": href, "source": "linkedin_snippet"}
-    except Exception as exc:
-        log.error(f"LinkedIn error: {exc}")
+            if not name:
+                snippet = result_div.css(".result__snippet::text").get() or ""
+                name, title = extract_from_snippet(snippet)
+            if name:
+                log.info(f"✅ LinkedIn (DuckDuckGo): {name} | {title}")
+                return {"person_name": name, "person_title": title, "linkedin_url": href, "source": "duckduckgo"}
+    except Exception as e:
+        log.warning(f"DuckDuckGo search falló: {e}")
+
+    try:
+        role_q_bing = " OR ".join(f'"{r~�' for r in DECISION_MAKER_ROLES[:8])
+        bing_query = f'site:linkedin.com/in "{company}" ({role_q_bing}){location_part}'
+        bing_url = f"https://www.bing.com/search?q={quote(bing_query)}&count=10&setlang=es"
+        log.info(f"🔷 Bing LinkedIn search: '{company}'")
+        with FetcherSession(impersonate="chrome") as session:
+            page = session.get(bing_url, stealthy_headers=True)
+        result = parse_results(page, "bing")
+        if result: return result
+    except Exception as e:
+        log.warning(f"Bing search falló: {e}")
+
+    log.info(f"❌ No encontrado para '{company}'")
     return {"person_name": "NOT_FOUND", "person_title": "", "linkedin_url": "", "source": "not_found"}
 
 if __name__ == "__main__":
