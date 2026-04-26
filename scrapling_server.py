@@ -1,18 +1,23 @@
 """
-scrapling_server.py - Venara AI Lead Scraping Server v3.1
-Sin browsers - usa solo FetcherSession (HTTP sin Playwright)
+scrapling_server.py - Venara AI Lead Scraping Server v4.0
+
+Sin browsers - FetcherSession HTTP only
+CAMBIOS v4:
+- /search-linkedin-companies devuelve [] en vez de 404 cuando no hay resultados
+- Mejor manejo de ubicaciones (Buenos Aires, Lima, etc.)
+- Fallback: si LinkedIn no da resultados, busca negocios directamente
 """
 from __future__ import annotations
 import re, logging
 from urllib.parse import quote
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 from scrapling.fetchers import FetcherSession
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s?")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
-app = FastAPI(title="Venara Scrapling Server", version="3.1.0")
+app = FastAPI(title="Venara Scrapling Server", version="4.0.0")
 
 class MapsRequest(BaseModel):
     query: str
@@ -66,44 +71,33 @@ def fix_href(href):
         except: pass
     return href
 
-def get_search_urls(query):
+def get_urls(query):
     return [
-        ("https://www.google.com/search?q=" + quote(query) + "&num=20&hl=es&gl?pe", "google"),
+        ("https://www.google.com/search?q=" + quote(query) + "&num=20&hl=es&gl=pe", "google"),
         ("https://html.duckduckgo.com/html/?q=" + quote(query) + "&kl=es-es", "duckduckgo"),
         ("https://www.bing.com/search?q=" + quote(query) + "&count=20&setlang=es", "bing"),
     ]
 
-COMPANY_SELS = [
-    ("div.g a", "h3"),
-    ("div.tF2Cxc a", "h3"),
-    ("li.b_algo h2 a", None),
-    (".result__title a", None),
-    ("a[href*='linkedin.com/company']", None),
-]
-
-PERSON_SELS = [
-    ("div.g a", "h3"),
-    ("div.tF2Cxc a", "h3"),
-    ("li.b_algo h2 a", None),
-    (".result__title a", None),
-]
+COMPANY_SELS = [("div.g a","h3"),("div.tF2Cxc a","h3"),("li.b_algo h2 a",None),(".result__title a",None),("a[href*='linkedin.com/company']",None)]
+PERSON_SELS = [("div.g a","h3"),("div.tF2Cxc a","h3"),("li.b_algo h2 a",None),(".result__title a",None)]
+GENERAL_SELS = [("div.g a","h3"),("div.tF2Cxc a","h3"),("li.b_algo h2 a",None),(".result__title a",None)]
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "3.1.0"}
+    return {"status": "ok", "version": "4.0.0"}
 
 @app.post("/search-linkedin-companies")
 def search_linkedin_companies(req: MapsRequest):
     niche = req.query.strip()
     loc = req.location.strip()
     loc_p = '"' + loc + '"' if loc else ""
-    query = "site:linkedin.com/company " + niche + " " + loc_p
+    li_query = "site:linkedin.com/company " + niche + " " + loc_p
     results = []
     seen = set()
-    for url_f, sname in get_search_urls(query):
+    for url_f, sname in get_urls(li_query):
         if len(results) >= req.max_results: break
         try:
-            log.info("LinkedIn Companies [" + sname + "]: " + niche)
+            log.info("LinkedIn Companies [" + sname + "]: " + niche + " " + loc)
             with FetcherSession(impersonate="chrome") as s:
                 page = s.get(url_f, stealthy_headers=True)
             for asel, tsel in COMPANY_SELS:
@@ -134,9 +128,37 @@ def search_linkedin_companies(req: MapsRequest):
                     found_here = True
                 if found_here: break
         except Exception as e:
-            log.warning(sname + " failed: " + str(e))
+            log.warning("LinkedIn [" + sname + "] failed: " + str(e))
     if not results:
-        raise HTTPException(404, "No empresas LinkedIn para: " + niche + " " + loc)
+        log.info("LinkedIn sin resultados - usando fallback: " + niche)
+        fallback_query = niche + " empresa " + loc + " contacto web"
+        for url_f, sname in get_urls(fallback_query):
+            if len(results) >= req.max_results: break
+            try:
+                with FetcherSession(impersonate="chrome") as s:
+                    page = s.get(url_f, stealthy_headers=True)
+                for asel, tsel in GENERAL_SELS:
+                    anchors = page.css(asel)
+                    if not anchors: continue
+                    for anchor in anchors:
+                        href = fix_href(anchor.attrib.get("href",""))
+                        skip = ["google","bing","facebook","instagram","twitter","youtube","wikipedia"]
+                        if any(sk in href for sk in skip): continue
+                        if not href.startswith("http"): continue
+                        if tsel:
+                            tel = anchor.css(tsel)
+                            tt = tel.css("::text").get() if tel else (anchor.css("::text").get() or "")
+                        else:
+                            tt = anchor.css("::text").get() or ""
+                        name = re.sub(r"\s*[|\-].*$","",tt,flags=re.I).strip()
+                        if not name or len(name) < 3 or name in seen: continue
+                        results.append({"name": name, "linkedin_url": "", "website": href, "source": "fallback_" + sname})
+                        seen.add(name)
+                        if len(results) >= req.max_results: break
+                    if len(results) >= req.max_results: break
+            except Exception as e:
+                log.warning("Fallback [" + sname + "] failed: " + str(e))
+    log.info("Total resultados: " + str(len(results)) + " para " + niche)
     return {"results": results[:req.max_results], "total": len(results)}
 
 @app.post("/scrape-website")
@@ -193,7 +215,7 @@ def search_linkedin(req: LinkedInRequest):
                         tt = anchor.css("::text").get() or ""
                     n, t = extract_title(tt)
                     if n:
-                        log.info("LinkedIn " + sname + ": " + n + " | " + t)
+                        log.info("LinkedIn " + sname + ": " + n)
                         return {"person_name":n,"person_title":t,"linkedin_url":href,"source":sname}
                     par = anchor
                     for _ in range(4):
@@ -209,5 +231,5 @@ def search_linkedin(req: LinkedInRequest):
     return {"person_name":"NOT_FOUND","person_title":"","linkedin_url":"","source":"not_found"}
 
 if __name__ == "__main__":
-    log.info("Venara Scrapling Server v3.1.0 - port 8765")
+    log.info("Venara Scrapling Server v4.0.0 - port 8765")
     uvicorn.run(app, host="0.0.0.0", port=8765, log_level="info")
