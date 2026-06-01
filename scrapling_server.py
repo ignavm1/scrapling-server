@@ -8,7 +8,7 @@ CAMBIOS v4:
 - Fallback: si LinkedIn no da resultados, busca negocios directamente
 """
 from __future__ import annotations
-import re, logging
+import re, os, logging
 from urllib.parse import quote
 import uvicorn
 from fastapi import FastAPI
@@ -18,6 +18,24 @@ from scrapling.fetchers import FetcherSession
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 app = FastAPI(title="Venara Scrapling Server", version="4.0.0")
+
+# Proxy residencial (opcional). Sin esto, las búsquedas salen desde la IP del
+# servidor (Render/datacenter), que Google/Bing/LinkedIn bloquean (429/403) →
+# pocas o cero empresas. Con un proxy residencial las requests parecen tráfico
+# real y no se bloquean. Formato: "http://usuario:password@host:puerto".
+# Si PROXY_URL no está definido, el server funciona igual (sin proxy, como antes).
+PROXY_URL = os.environ.get("PROXY_URL") or None
+if PROXY_URL:
+    log.info("Proxy residencial ACTIVO")
+else:
+    log.warning("PROXY_URL no configurado - scraping desde IP directa (riesgo de bloqueo)")
+
+def make_session():
+    """FetcherSession con proxy si está configurado. Centraliza la config para
+    no repetir el kwarg en cada llamada."""
+    if PROXY_URL:
+        return FetcherSession(impersonate="chrome", proxy=PROXY_URL)
+    return FetcherSession(impersonate="chrome")
 
 class MapsRequest(BaseModel):
     query: str
@@ -98,7 +116,7 @@ def search_linkedin_companies(req: MapsRequest):
         if len(results) >= req.max_results: break
         try:
             log.info("LinkedIn Companies [" + sname + "]: " + niche + " " + loc)
-            with FetcherSession(impersonate="chrome") as s:
+            with make_session() as s:
                 page = s.get(url_f, stealthy_headers=True)
             for asel, tsel in COMPANY_SELS:
                 anchors = page.css(asel)
@@ -135,7 +153,7 @@ def search_linkedin_companies(req: MapsRequest):
         for url_f, sname in get_urls(fallback_query):
             if len(results) >= req.max_results: break
             try:
-                with FetcherSession(impersonate="chrome") as s:
+                with make_session() as s:
                     page = s.get(url_f, stealthy_headers=True)
                 for asel, tsel in GENERAL_SELS:
                     anchors = page.css(asel)
@@ -167,7 +185,7 @@ def scrape_website(req: WebsiteRequest):
     if not url: return {"clean_text": "NO_CONTENT", "url": url}
     log.info("Scraping: " + url)
     try:
-        with FetcherSession(impersonate="chrome") as s:
+        with make_session() as s:
             page = s.get(url, stealthy_headers=True, follow_redirects=True)
         html = page.html_content or ""
         if html and len(html) > 100:
@@ -202,7 +220,7 @@ def search_linkedin(req: LinkedInRequest):
     ]
     for url_f, sname in queries:
         try:
-            with FetcherSession(impersonate="chrome") as s:
+            with make_session() as s:
                 page = s.get(url_f, stealthy_headers=True)
             for asel, tsel in PERSON_SELS:
                 for anchor in page.css(asel):
