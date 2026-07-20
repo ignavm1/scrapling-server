@@ -1,3 +1,5 @@
-scrapling[fetchers]>=0.4.7
-fastapi>=0.110.0
-uvicorn>=0.29.0
+# Pinned for reproducible builds (matches the tested .venv).
+# Bump deliberately; for a full lock use pip-tools/uv.
+scrapling[fetchers]==0.4.8
+fastapi==0.136.3
+uvicorn==0.48.0
