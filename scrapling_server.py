@@ -30,7 +30,7 @@ async def lifespan(app: FastAPI):
         log.warning("No se pudo ajustar el threadpool: " + str(e))
     yield
 
-app = FastAPI(title="Venara Scrapling Server", version="4.0.0", lifespan=lifespan)
+app = FastAPI(title="Venara Scrapling Server", version="5.0.0", lifespan=lifespan)
 
 # Proxy residencial (opcional). Sin esto, las búsquedas salen desde la IP del
 # servidor (Render/datacenter), que Google/Bing/LinkedIn bloquean (429/403) →
@@ -290,7 +290,7 @@ def _cache_set(key, data):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "4.0.0"}
+    return {"status": "ok", "version": "5.0.0"}
 
 @app.post("/search-linkedin-companies", dependencies=[Depends(require_api_key)])
 def search_linkedin_companies(req: CompanySearchRequest):
@@ -425,5 +425,5 @@ def search_linkedin(req: LinkedInRequest):
     return {"person_name":"NOT_FOUND","person_title":"","linkedin_url":"","source":"not_found"}
 
 if __name__ == "__main__":
-    log.info("Venara Scrapling Server v4.0.0 - port 8765")
+    log.info("Venara Scrapling Server v5.0.0 - port 8765")
     uvicorn.run(app, host="0.0.0.0", port=8765, log_level="info")
