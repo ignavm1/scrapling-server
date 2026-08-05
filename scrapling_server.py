@@ -53,7 +53,23 @@ else:
     log.warning("API_KEY no configurado - endpoints SIN autenticacion (configurar en produccion)")
 
 def require_api_key(x_api_key: str = Header(default="")):
-    if API_KEY and not secrets.compare_digest(x_api_key, API_KEY):
+    # Comparar BYTES, no str. secrets.compare_digest() sobre str lanza
+    # TypeError("comparing strings with non-ASCII characters is not supported")
+    # si CUALQUIERA de los dos lados tiene un caracter fuera de ASCII, y ese
+    # TypeError sale como 500, no como 401.
+    #
+    # Las dos formas de romperlo, ambas reales:
+    #   1. Un API_KEY mal pegado en el panel de Render con un caracter raro
+    #      dentro: entonces TODA peticion revienta con 500, incluso las que
+    #      traen la key correcta y las que no traen ninguna. Paso el 2026-08-05
+    #      y dejo el descubrimiento de empresas caido por horas.
+    #   2. Aun con un API_KEY perfectamente ASCII, cualquiera puede mandar
+    #      "X-API-Key: cafe" con acento y tumbar el endpoint. O sea el chequeo
+    #      de auth era, el mismo, un vector de denegacion de servicio.
+    #
+    # .encode() nunca falla sobre un str de Python y compare_digest sobre bytes
+    # sigue siendo de tiempo constante, que es el motivo de usarla.
+    if API_KEY and not secrets.compare_digest(x_api_key.encode("utf-8"), API_KEY.encode("utf-8")):
         raise HTTPException(status_code=401, detail="invalid or missing api key")
 
 def make_session():
