@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 ruvector.db
+
+# Herramientas locales, no del proyecto
+.claude-flow/
