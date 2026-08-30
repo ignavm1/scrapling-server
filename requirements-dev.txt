@@ -1,0 +1,5 @@
+# Dependencias SOLO de test. NO van a la imagen: el Dockerfile instala
+# requirements.txt a secas, asi que el contenedor de produccion no las lleva.
+-r requirements.txt
+pytest==9.1.1
+httpx==0.28.1
