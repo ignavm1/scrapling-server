@@ -84,6 +84,10 @@ def buscar(nicho: str, ubicacion: str, limite: int) -> dict:
         for prov in activos:
             trabajos.append((est, prov))
     trabajos.sort(key=lambda t: (t[0].prioridad, t[1].prioridad))
+    # Techo duro. Se ordena primero para que lo que quede afuera sea lo que
+    # menos aporta, no lo que toco por azar.
+    descartados_por_techo = max(0, len(trabajos) - config.MAX_FETCHES)
+    trabajos = trabajos[: config.MAX_FETCHES]
 
     crudos: list[tuple] = []
     por_proveedor: dict[str, int] = {}
@@ -170,6 +174,8 @@ def buscar(nicho: str, ubicacion: str, limite: int) -> dict:
         "ranking": stats_rank,
         "descartes": descartes,
         "estrategias": [e.nombre for e in plan],
+        "fetches_planificados": len(trabajos),
+        "fetches_descartados_por_techo": descartados_por_techo,
         "ubicacion": {
             "texto": ubi.texto, "ciudad": ubi.ciudad, "pais": ubi.pais,
             "mercado": ubi.mercado, "reconocida": ubi.reconocida,

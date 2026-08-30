@@ -24,6 +24,11 @@ SELECTORES = {
     "duckduckgo": [(".result__title a", None), ("a.result__a", None),
                    (".results .result a", None)],
     "google": [("div.g a", "h3"), ("div.tF2Cxc a", "h3"), ("div.yuRUbf a", "h3")],
+    "brave": [("#results .snippet a", None), (".snippet-title", None),
+              ("a.result-header", None)],
+    # lite.duckduckgo.com es una tabla sin clases: no hay selector util y el
+    # fallback por regex es la via correcta, no un parche.
+    "ddglite": [("a.result-link", None)],
 }
 
 _RX_ANCLA = re.compile(r'<a\b[^>]*\bhref=["\'](.*?)["\'][^>]*>(.*?)</a>', re.I | re.S)

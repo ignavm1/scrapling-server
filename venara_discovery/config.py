@@ -19,6 +19,15 @@ MAX_CONCURRENCY = int(os.environ.get("MAX_CONCURRENCY", "6"))
 # sistema se autobloquea y despues reporta "el nicho no tiene resultados".
 PROVIDER_COOLDOWN_S = float(os.environ.get("PROVIDER_COOLDOWN_S", "1.2"))
 
+# Techo de fetches por busqueda. Con 5 estrategias y 4 proveedores el producto
+# da 20, y dispararlos todos hace dos danos a la vez: revienta el presupuesto de
+# tiempo y provoca el captcha que despues nos deja sin ninguna fuente.
+#
+# Sumar proveedores sirve para COBERTURA (que uno bloqueado no mate la
+# busqueda), no para multiplicar el gasto. Los trabajos se ordenan por valor y
+# se corta aca.
+MAX_FETCHES = int(os.environ.get("MAX_FETCHES", "12"))
+
 # ── Cache ────────────────────────────────────────────────────────────────────
 CACHE_TTL_S = int(os.environ.get("CACHE_TTL_S", str(6 * 60 * 60)))
 CACHE_MAX = int(os.environ.get("CACHE_MAX", "500"))

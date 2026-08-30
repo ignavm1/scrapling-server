@@ -43,6 +43,11 @@ DIRECTORIOS = {
     "clutch.co", "sortlist.com", "goodfirms.co", "designrush.com",
     "agencyspotter.com", "upcity.com", "expertise.com", "trustpilot.com",
     "glassdoor.com", "indeed.com", "computrabajo.com", "bumeran.com",
+    # Bolsas de trabajo: aparecen alto en cualquier busqueda por nicho+ciudad
+    # porque publican vacantes de ese rubro, y no son la empresa buscada.
+    "jooble.org", "laborum.cl", "trabajando.com", "zonajobs.com.ar",
+    "konzerta.com", "empleosti.com.mx", "occ.com.mx", "elempleo.com",
+    "talent.com", "jobrapido.com", "neuvoo.com", "adzuna.com",
     "crunchbase.com", "zoominfo.com", "apollo.io", "rocketreach.co",
     "opencorporates.com", "dnb.com", "bloomberg.com", "owler.com",
     "mercadolibre.com", "amazon.com", "ebay.com", "alibaba.com",

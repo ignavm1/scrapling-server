@@ -206,3 +206,96 @@ cuando ademas no hay resultados que extraer.
 
 Los tres estan fijados en `tests/test_edge_cases.py`, cada uno con su control
 positivo para que el arreglo no se pase de largo y descarte empresas buenas.
+
+---
+
+# Tercera tanda — "que Google no nos detecte"
+
+## F17 — Google no falla al renderizar: nos rechaza explicitamente
+
+Se probo lo unico que podia cambiar el resultado: **ejecutar la pagina con un
+navegador real** (Chromium via Playwright, `DynamicFetcher`), porque en HTTP
+puro Google devuelve un bootstrap de JavaScript sin resultados (F3).
+
+Resultado medido:
+
+| via | tiempo | bytes | anclas externas | status |
+|---|---|---|---|---|
+| HTTP puro | 213ms | 91.943 | **0** | 200 |
+| Chromium renderizando | 7.957ms | 6.839 | **0** | **429** |
+
+El HTML renderizado dice, textual:
+
+> "Nuestros sistemas han detectado tráfico inusual procedente de tu red de
+> ordenadores. En esta página se comprueba si eres tú quien envía las
+> solicitudes en lugar de un robot."
+
+…y trae un `captcha-form`.
+
+**Conclusion:** no es una limitacion tecnica que se cierre con un navegador
+mejor. Google tomo una decision de acceso y pide verificacion humana. Pasar de
+ahi es resolver el desafio, y eso no se hace. Google queda apagado
+(`ENABLE_GOOGLE=0`) y el presupuesto se gasta en fuentes que si atienden.
+
+Fijado por `bench/check_no_captcha_bypass.py`, que ademas verifica lo contrario:
+que `blocking.py` **si** reconozca captchas, porque reconocer un desafio es lo
+que permite retirarse de el.
+
+## F18 — Renderizar por navegador no aporta nada medible en este pipeline
+
+Ya con el navegador funcionando, se midio si servia para lo otro que hace el
+servidor: leer los sitios de los prospectos.
+
+Sobre 15 sitios reales descubiertos por el motor:
+
+- HTTP puro no puede leer **2 de 15** (13%).
+- El navegador rescata **0 de esos 2**. Uno devuelve 267 caracteres por las dos
+  vias (es un sitio flaco, no un problema de JavaScript); el otro cierra la
+  conexion a ambos.
+- Sobre los 13 que si funcionan, renderizar aporta datos extra en **1**.
+
+Costo de adoptarlo: dependencia de Playwright, ~300MB de RAM por navegador y
+segundos por fetch, en un servicio que ya tuvo un OOM en Render.
+
+**Decision: no se adopta.** Se deja registrado para no volver a pagar la
+investigacion.
+
+## F19 — Lo que SI subio el outcome: mas fuentes, no mas sigilo
+
+Se midieron siete buscadores que sirven HTML deliberadamente. Resultado:
+
+| motor | status | utilizable | empresas utiles |
+|---|---|---|---|
+| **brave** | 200 | si | **9** |
+| **lite.duckduckgo** | 200 | si | **6** |
+| marginalia | 200 | si | envuelve las URLs; queda pendiente |
+| mojeek | 200 | **no** | `<title>Captcha</title>` |
+| startpage | 200 | no | bloqueado |
+| ecosia | 403 | no | bloqueado |
+| yep | 200 | no | bloqueado |
+
+Se agregaron **brave** y **ddglite**. Medido sobre el mismo corpus:
+
+```
+2 proveedores (ddg + bing)          10 empresas unicas
+4 proveedores (+ brave + ddglite)   20 empresas unicas
+solo aportadas por los nuevos       10
+perdidas                             0
+```
+
+**El doble de empresas, sin tocar una sola defensa de nadie.**
+
+Con techo: `MAX_FETCHES=12`. Cinco estrategias por cuatro proveedores son 20
+combinaciones, y dispararlas todas revienta el presupuesto y provoca el captcha
+que nos deja sin fuentes. Sumar proveedores es para COBERTURA -- que un motor
+bloqueado no mate la busqueda -- no para gastar mas.
+
+## F20 — La pagina de captcha de Mojeek destapo un hueco del detector
+
+Sus unicos enlaces "externos" son subdominios propios (`blog.mojeek.com`,
+`community.mojeek.com`), asi que el conteo de anclas cruzaba el umbral y la
+pagina pasaba por buena.
+
+Corregido agregando el `<title>` como senal fuerte: ninguna pagina de
+resultados legitima se titula "Captcha". Con control positivo sobre los cuatro
+motores que si funcionan, cuyo titulo lleva la query.

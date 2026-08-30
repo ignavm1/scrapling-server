@@ -25,7 +25,7 @@ evidencia.
 - [x] G2: con todos los proveedores bloqueados la API reporta el bloqueo en vez de "cero resultados"
   CHECK: .venv/bin/python -m pytest tests/test_api_contract.py -q --no-header -s -k blocked
   EXPECT: /CONTRATO BLOQUEO VERIFICADO/
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e6813ac092b6/22 entries; EXPECT=matched; output-sha256=d5843b8cd91951e47f11b4edd3188e8573b8c10a250ae511f56d72531b36ae74; output-bytes=579
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e6813ac092b6/22 entries; EXPECT=matched; output-sha256=ad24ed143ac70fff692066d4324dda4316658e0f97fa9980c450ad7b3a7f5892; output-bytes=579
 
 - [x] G3: el cuerpo camelCase que manda Venara hoy controla de verdad el tope de resultados
   CHECK: .venv/bin/python -m pytest tests/test_api_contract.py -q --no-header -s -k maxresults
@@ -80,7 +80,7 @@ evidencia.
 - [x] G13: la suite completa pasa y ningun test quedo desactivado
   CHECK: .venv/bin/python bench/run_suite.py
   EXPECT: /SUITE VERIFICADA/
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e6813ac092b6/22 entries; EXPECT=matched; output-sha256=e288aa1564b82032cf980840ee0f3cf7466543d8d3e9d2a9dd37fd226339e0ef; output-bytes=834
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e6813ac092b6/22 entries; EXPECT=matched; output-sha256=bbaeea15c9948bb215edc6a9f663260964999f9e7114b9c86ca4aa0c4b8a9457; output-bytes=834
 
 - [x] G14: el Dockerfile lleva todo lo necesario y el entrypoint del contenedor sirve /health
   CHECK: .venv/bin/python bench/check_docker.py
@@ -100,9 +100,9 @@ evidencia.
 - [x] G17: los hallazgos de la auditoria quedan escritos con su evidencia reproducible
   CHECK: .venv/bin/python bench/check_findings.py
   EXPECT: /HALLAZGOS VERIFICADOS/
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e6813ac092b6/22 entries; EXPECT=matched; output-sha256=77dc2bfae8f8c37995486a5b536b26245b1d34991f1cbbecbfa069a7f0c05116; output-bytes=66
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e6813ac092b6/22 entries; EXPECT=matched; output-sha256=468baddb0c25986f07f05da5007762af8ec766c16d36814a331e03c5852676d3; output-bytes=66
 
 - [x] G18: la segunda pasada de edge cases y seguridad esta fijada como tests
   CHECK: .venv/bin/python -m pytest tests/test_edge_cases.py -q --no-header -s
   EXPECT: /EDGE CASES VERIFICADOS/
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e6813ac092b6/22 entries; EXPECT=matched; output-sha256=cd91688e4f85ff2520ae9b8bfb0150636b0c4520271696088579fd9c7d48a9ac; output-bytes=86
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e6813ac092b6/22 entries; EXPECT=matched; output-sha256=13850523c4166c39cdf4e035f909467a80573cacbbdb33f3cd62ba6b187aa97a; output-bytes=86

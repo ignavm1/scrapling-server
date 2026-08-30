@@ -270,6 +270,30 @@ def titulo_es_generico(titulo: str, contexto: str = "") -> bool:
     return len("".join(propios)) < 4
 
 
+def recortar_en_dominio(titulo: str, url: str) -> str:
+    """Corta el titulo donde el buscador inserto el dominio del resultado.
+
+    Brave arma el titulo como `<nombre> <dominio> <segmentos de ruta> <desc>`:
+
+        "Webtilia webtilia.com en Multicultural Digital Marketing Agency"
+        "MK agenciamk.com Agencia de Marketing Digital en Lima Peru"
+
+    El nombre es lo que va ANTES del dominio. Sin este corte el cliente ve
+    "Webtilia webtilia.com en Multicultural..." como razon social.
+    """
+    dom = dominio_registrable(url)
+    if not dom or not titulo:
+        return titulo
+    # Se busca el dominio (con o sin www) como token dentro del titulo.
+    for variante in (dom, "www." + dom, dom.split(".")[0] + "." + dom.split(".", 1)[1] if "." in dom else dom):
+        idx = titulo.lower().find(variante.lower())
+        if idx > 0:
+            cabeza = titulo[:idx].strip(" -|·–—:,")
+            if len(cabeza) >= 2:
+                return cabeza
+    return titulo
+
+
 def mejor_nombre(titulo: str, url: str, contexto: str = "") -> str:
     """Elige entre el titulo y el nombre derivado del dominio.
 
@@ -277,7 +301,7 @@ def mejor_nombre(titulo: str, url: str, contexto: str = "") -> str:
     se distingue de onzamarketing.com -> "Onzamarketing", mientras que los dos
     titulos empiezan igual.
     """
-    limpio = limpiar_titulo(titulo)
+    limpio = limpiar_titulo(recortar_en_dominio(titulo, url))
     if limpio and not titulo_es_generico(limpio, contexto):
         return limpio
     return nombre_desde_dominio(url) or limpio

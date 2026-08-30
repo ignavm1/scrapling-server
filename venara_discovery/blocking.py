@@ -110,6 +110,25 @@ def contar_anclas_externas(html: str) -> int:
     return n
 
 
+# El <title> es la senal mas barata y mas dificil de confundir: ninguna pagina
+# de resultados legitima se titula "Captcha".
+#
+# Hizo falta porque el conteo de anclas se puede enganar: la pagina de captcha
+# de Mojeek enlaza a sus PROPIOS subdominios (blog., community.), que el
+# contador tomaba por externos, y asi cruzaba el umbral y pasaba por buena (F20).
+_TITULOS_BLOQUEO = re.compile(
+    r"^\s*(captcha|are you a robot|access denied|forbidden|blocked|"
+    r"security check|attention required|just a moment|verify you are human|"
+    r"unusual traffic|error 4\d\d)\s*$",
+    re.I,
+)
+
+
+def titulo_de(html: str) -> str:
+    m = re.search(r"<title[^>]*>(.*?)</title>", html or "", re.I | re.S)
+    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+
+
 def analizar(html: str | None, status: int | None) -> Veredicto:
     """Decide si una respuesta de buscador sirve.
 
@@ -123,6 +142,9 @@ def analizar(html: str | None, status: int | None) -> Veredicto:
 
     bajo = html.lower()
     anclas = contar_anclas_externas(html)
+
+    if _TITULOS_BLOQUEO.match(titulo_de(html)):
+        return Veredicto(True, "captcha", anclas)
 
     for marca in _MARCAS_BLOQUEO:
         if marca in bajo:
