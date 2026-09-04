@@ -122,6 +122,9 @@ _NO_ES_NOMBRE = {
     "enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto",
     "septiembre", "setiembre", "octubre", "noviembre", "diciembre",
     "sociedad", "limitada", "anonima", "spa", "sac", "sas", "ltda",
+    # MEDIDO (2026-09-03): "Invitado Ian Lee" entro como nombre desde el
+    # titulo de un video. La palabra de contexto viaja pegada al nombre real.
+    "invitado", "invitada", "invitados", "live", "vivo", "episodio", "capitulo",
     "conferencia", "congreso", "seminario", "webinar", "evento", "expositores",
     "panelistas", "speakers", "programa", "entrevista", "noticias", "prensa",
     "sobre", "acerca", "team", "about", "leadership", "management",

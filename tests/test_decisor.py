@@ -545,3 +545,97 @@ def test_search_linkedin_sin_dominio_sigue_comportandose_como_siempre(monkeypatc
     d = cliente.post("/search-linkedin", json={"company": EMPRESA}).json()
     assert d["person_name"] == "NOT_FOUND"
     assert set(d) >= {"person_name", "person_title", "linkedin_url", "source"}
+
+
+# ── D7: defectos vistos buscando 10 decisores reales (2026-09-03) ───────────
+
+def test_una_red_social_no_es_fuente_de_decisor(monkeypatch):
+    # MEDIDO: un post de Instagram y un video de Facebook entraron como fuente.
+    # Una red social no publica el organigrama de nadie: lo que hay es texto
+    # suelto que casualmente junta un nombre y una palabra que parece cargo.
+    serp = ('<html><body><div class="results">'
+            '<div class="result"><a class="result__a" href="https://www.instagram.com/p/ABC123">'
+            'Benjamin Labra - Co-Founder - Onza Marketing</a>'
+            '<a class="result__snippet" href="https://www.instagram.com/p/ABC123">'
+            'Onza Marketing con su fundador.</a></div>'
+            '</div></body></html>')
+    _sin_red(monkeypatch, serp=serp, pagina="<html><body><p>Servicios</p></body></html>")
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert not any("instagram" in c.url for c in r["candidatos"]), \
+        [c.url for c in r["candidatos"]]
+
+
+def test_control_positivo_un_medio_de_prensa_SI_sigue_siendo_fuente(monkeypatch):
+    # Sin este control, el filtro podria estar descartando tambien la prensa,
+    # que es uno de los angulos que mas rinde para nombramientos.
+    _sin_red(monkeypatch, pagina="<html><body><p>Servicios</p></body></html>")
+    r = decisor.resolver(EMPRESA, "", "Chile")
+    assert any("df.cl" in c.url for c in r["candidatos"]), [c.url for c in r["candidatos"]]
+
+
+def test_una_palabra_de_contexto_no_se_pega_al_nombre():
+    # MEDIDO: "Invitado Ian Lee" entro como persona desde el titulo de un video.
+    assert personas.es_nombre_de_persona("Invitado Ian Lee") is False
+    assert personas.es_nombre_de_persona("Live Ian Lee") is False
+    # Control positivo: el nombre limpio sigue pasando.
+    assert personas.es_nombre_de_persona("Ian Lee") is True
+
+
+def test_fusiona_dos_lecturas_del_mismo_nombre_en_la_misma_pagina():
+    # MEDIDO: "Karim Pichara" y "Kim Pichara" salieron los dos de notco.ai/about
+    # como si fueran dos CTO. "Kim" no es prefijo de "Karim", asi que la regla
+    # de contencion no las une; dentro de UNA pagina, mismo apellido y misma
+    # inicial es el parser leyendo dos veces.
+    from venara_discovery.normalize import clave_nombre
+    a = _c("Karim Pichara", 1.0, cargo="Co-Founder & CTO")
+    b = _c("Kim Pichara", 0.89, cargo="CTO")
+    a.url = b.url = "https://notco.ai/about"
+    salida = decisor.fusionar_mismo_humano({clave_nombre("Karim Pichara"): a,
+                                            clave_nombre("Kim Pichara"): b})
+    assert len(salida) == 1
+    unico = list(salida.values())[0]
+    assert unico.nombre == "Karim Pichara"
+    assert any("Kim Pichara" in e for e in unico.evidencia)
+
+
+def test_no_fusiona_a_dos_personas_del_mismo_apellido_en_paginas_distintas():
+    # Hermanos o familia duena de la empresa existen. Fusionarlos entre fuentes
+    # distintas borraria a una persona real.
+    from venara_discovery.normalize import clave_nombre
+    a = _c("Cristobal Della Maggiora", 0.65)
+    b = _c("Carlos Della Maggiora", 0.65)
+    a.url = "https://craft.co/x"
+    b.url = "https://otra.cl/y"
+    salida = decisor.fusionar_mismo_humano({clave_nombre(a.nombre): a,
+                                            clave_nombre(b.nombre): b})
+    assert len(salida) == 2
+
+
+def test_distingue_la_pagina_hallada_buscando_de_la_hallada_por_la_home(monkeypatch):
+    # MEDIDO: los candidatos de notco.ai/about salian etiquetados
+    # "sitio_directo" aunque esa pagina se encontro BUSCANDO. La etiqueta hacia
+    # leer la evidencia como si el sistema hubiera entrado solo por la home, y
+    # ocultaba que ese candidato desaparece cuando los buscadores bloquean.
+    home_sin_equipo = "<html><body><a href='/servicios'>Servicios</a></body></html>"
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if url.rstrip("/") == "https://" + DOMINIO:
+            return _Rta(html=home_sin_equipo)
+        if proveedor == "sitio":
+            return _Rta(html=PAGINA)
+        return _Rta(html=SERP)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    desde_pagina = [c for c in r["candidatos"] if c.proveedor == "sitio"]
+    assert desde_pagina, "no se leyo ninguna pagina"
+    assert all(c.angulo == "pagina_desde_busqueda" for c in desde_pagina), \
+        [(c.nombre, c.angulo) for c in desde_pagina]
+
+
+def test_control_positivo_la_home_si_etiqueta_sitio_directo(monkeypatch):
+    # Sin este control, el test de arriba pasaria con un resolutor que etiqueta
+    # todo igual, en la direccion contraria.
+    _sin_red(monkeypatch)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert any(c.angulo == "sitio_directo" for c in r["candidatos"])

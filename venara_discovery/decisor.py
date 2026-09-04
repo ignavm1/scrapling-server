@@ -42,7 +42,7 @@ import time
 from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass, field
 
-from . import config, extraction, personas, providers, website
+from . import config, extraction, filtering, personas, providers, website
 from .fetch import SaludProveedores, obtener
 from .linkedin import puntuar_cargo
 from .location import Ubicacion, interpretar
@@ -329,6 +329,37 @@ def _paginas_a_visitar(items: list[tuple[dict, str, str]], empresa: str,
 MIN_CLAVE_PARA_FUSION = 8
 
 
+def _fusionar_por_apellido_en_la_misma_pagina(
+        candidatos: dict[str, Candidato]) -> dict[str, Candidato]:
+    """Une variantes del mismo nombre leidas de la MISMA url.
+
+    Se exige la misma url a proposito: dos personas del mismo apellido y misma
+    inicial existen (hermanos, familia duena de la empresa), y fusionarlas
+    entre fuentes distintas borraria a una de verdad. Dentro de una sola
+    pagina, en cambio, es el parser leyendo dos veces.
+    """
+    por_firma: dict[tuple, str] = {}
+    fuera: set[str] = set()
+    for k, c in candidatos.items():
+        partes = [p for p in c.nombre.split() if len(p) > 1]
+        if len(partes) < 2:
+            continue
+        firma = (c.url, sin_acentos(partes[-1]).lower(), sin_acentos(partes[0])[:1].lower())
+        previo = por_firma.get(firma)
+        if previo is None:
+            por_firma[firma] = k
+            continue
+        gana, pierde = ((k, previo) if candidatos[k].score > candidatos[previo].score
+                        or (candidatos[k].score == candidatos[previo].score
+                            and len(candidatos[k].nombre) > len(candidatos[previo].nombre))
+                        else (previo, k))
+        candidatos[gana].evidencia = candidatos[gana].evidencia + [
+            'tambien leido como "%s" en la misma pagina' % candidatos[pierde].nombre]
+        por_firma[firma] = gana
+        fuera.add(pierde)
+    return {k: v for k, v in candidatos.items() if k not in fuera}
+
+
 def fusionar_mismo_humano(candidatos: dict[str, Candidato]) -> dict[str, Candidato]:
     """Une las formas del MISMO nombre en un solo candidato.
 
@@ -340,6 +371,12 @@ def fusionar_mismo_humano(candidatos: dict[str, Candidato]) -> dict[str, Candida
     Gana el de mayor score; si empatan, el nombre mas largo, que es el mas
     completo para saludar.
     """
+    # Segunda pasada, sobre la MISMA fuente: "Karim Pichara" y "Kim Pichara"
+    # salieron los dos de notco.ai/about. Ninguna es substring de la otra
+    # ("Kim" no es prefijo de "Karim"), asi que la regla de contencion no las
+    # une. Dentro de una sola pagina, mismo apellido + misma inicial ES la
+    # misma persona: el parser la leyo dos veces, no hay dos CTOs.
+    candidatos = _fusionar_por_apellido_en_la_misma_pagina(candidatos)
     claves = sorted(candidatos, key=len, reverse=True)
     fusionadas: dict[str, Candidato] = {}
     for k in claves:
@@ -418,7 +455,7 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         if previo is None or c.score > previo.score:
             candidatos[k] = c
 
-    def leer_pagina(url: str) -> None:
+    def leer_pagina(url: str, angulo: str = "sitio_directo") -> None:
         nonlocal fetches
         if url in visitadas:
             return
@@ -435,7 +472,7 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         for p in personas.extraer_de_texto(texto, url):
             agregar(Candidato(
                 nombre=p["person_name"], cargo=p["person_title"], url=url,
-                angulo="sitio_directo", proveedor="sitio",
+                angulo=angulo, proveedor="sitio",
                 origen="sitio_propio", donde="pagina", empresa_en_texto=liga))
 
     # ── Fase 1: el sitio de la empresa, sin pasar por ningun buscador ────────
@@ -509,6 +546,16 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         url = it.get("url", "")
         if personas.es_perfil_linkedin(url):
             continue
+        # MEDIDO (2026-09-03): un post de Instagram y un video de Facebook
+        # entraron como fuente de decisores. Una red social no publica el
+        # organigrama de nadie: lo que hay ahi es texto suelto que casualmente
+        # contiene un nombre y una palabra que parece cargo.
+        #
+        # Se filtra SOLO redes y buscadores, no `motivo_descarte()` entero: ese
+        # tambien descarta medios de prensa, y la prensa es justamente uno de
+        # los angulos que mas rinde para nombramientos.
+        if filtering.motivo_descarte(url, "") == "red-social-o-buscador":
+            continue
         texto = it.get("titulo", "") + " " + it.get("snippet", "")
         propio = website.pertenece_a(url, empresa) >= 0.8 or (
             bool(dominio) and dominio in url.lower())
@@ -526,7 +573,12 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
             break
         if len(visitadas) >= config.DECISOR_MAX_PAGINAS:
             break
-        leer_pagina(url)
+        # Angulo distinto al de la fase 1, y no es un detalle cosmetico: esta
+        # pagina se ENCONTRO BUSCANDO. Etiquetarla "sitio_directo" hacia leer
+        # la evidencia como si el sistema hubiera entrado solo por la home, y
+        # ocultaba que ese candidato desaparece cuando los buscadores bloquean
+        # -- que es exactamente lo que paso al repetir la medicion.
+        leer_pagina(url, angulo="pagina_desde_busqueda")
 
     candidatos = fusionar_mismo_humano(candidatos)
     ordenados = sorted(candidatos.values(), key=lambda c: -c.score)[:limite]
