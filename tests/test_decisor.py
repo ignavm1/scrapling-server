@@ -74,12 +74,29 @@ def test_los_cargos_se_pueden_pedir_y_estan_topeados():
     assert '"Onza Marketing" socio' in {a.query for a in directas}
 
 
-def test_ninguna_query_del_resolutor_usa_linkedin():
-    # F7: `site:linkedin.com/in` devuelve cero perfiles con control positivo.
-    # Un angulo que no puede traer nada es un angulo menos para los que si.
+def test_ninguna_query_del_resolutor_usa_el_operador_site_linkedin():
+    """Lo que esta prohibido es el OPERADOR, no la palabra.
+
+    F7 midio `site:linkedin.com/in` en Bing y DuckDuckGo: cero perfiles. De ahi
+    se concluyo -- de mas -- que los perfiles no estaban en el indice publico.
+    Medido de nuevo el 2026-09-04: Brave devuelve SIETE perfiles para la misma
+    empresa cuando la query dice simplemente "linkedin". El indice no era el
+    problema; el operador y el buscador si (F24).
+
+    Asi que la regla correcta no es "ninguna query nombra a LinkedIn": es
+    "ninguna gasta un fetch en el operador que esta medido en cero".
+    """
     for dom in ("", DOMINIO):
         for a in decisor.construir_plan(EMPRESA, dom, interpretar("Chile")):
-            assert "linkedin" not in a.query.lower(), a.query
+            assert "site:linkedin" not in a.query.lower(), a.query
+
+
+def test_el_plan_incluye_el_angulo_del_perfil_de_linkedin():
+    # Es el pedido explicito: buscar "(empresa) CEO" y entrar al perfil.
+    plan = decisor.construir_plan(EMPRESA, DOMINIO, interpretar("Chile"))
+    queries = [a.query for a in plan if a.nombre == "linkedin_perfil"]
+    assert queries, [a.nombre for a in plan]
+    assert any(q.lower().endswith("ceo linkedin") for q in queries), queries
 
 
 def test_control_positivo_una_query_prohibida_plantada_si_se_detecta():
@@ -521,3 +538,255 @@ def test_no_fusiona_por_un_nombre_de_pila_corto():
     entrada = {clave_nombre("Ana Diaz"): _c("Ana Diaz", 0.7),
                clave_nombre("Anabel Soto"): _c("Anabel Soto", 0.6)}
     assert len(decisor.fusionar_mismo_humano(entrada)) == 2
+
+
+def test_search_linkedin_usa_el_sitio_cuando_le_pasan_el_dominio(monkeypatch):
+    # MEDIDO EN PRODUCCION (2026-09-03): sin dominio, `/search-linkedin`
+    # devolvia NOT_FOUND por captcha de los proveedores; con dominio, la misma
+    # empresa se resuelve entrando al sitio, sin una sola busqueda. El campo es
+    # el que separa esos dos resultados.
+    todos = {p.nombre: "captcha" for p in providers.activos()}
+    _sin_red(monkeypatch, bloqueados=todos)
+    d = cliente.post("/search-linkedin", json={
+        "company": EMPRESA, "domain": DOMINIO, "location": "Chile"}).json()
+    assert d["person_name"] == "Matias Bravo", d
+    # La forma historica no se toca: el cliente lee estos campos por nombre.
+    assert set(d) >= {"person_name", "person_title", "linkedin_url", "source"}
+
+
+def test_search_linkedin_sin_dominio_sigue_comportandose_como_siempre(monkeypatch):
+    # `domain` es opcional: un cliente viejo que no lo manda no puede romperse.
+    todos = {p.nombre: "captcha" for p in providers.activos()}
+    todos["sitio"] = "captcha"
+    _sin_red(monkeypatch, bloqueados=todos)
+    d = cliente.post("/search-linkedin", json={"company": EMPRESA}).json()
+    assert d["person_name"] == "NOT_FOUND"
+    assert set(d) >= {"person_name", "person_title", "linkedin_url", "source"}
+
+
+# ── D7: defectos vistos buscando 10 decisores reales (2026-09-03) ───────────
+
+def test_una_red_social_no_es_fuente_de_decisor(monkeypatch):
+    # MEDIDO: un post de Instagram y un video de Facebook entraron como fuente.
+    # Una red social no publica el organigrama de nadie: lo que hay es texto
+    # suelto que casualmente junta un nombre y una palabra que parece cargo.
+    serp = ('<html><body><div class="results">'
+            '<div class="result"><a class="result__a" href="https://www.instagram.com/p/ABC123">'
+            'Benjamin Labra - Co-Founder - Onza Marketing</a>'
+            '<a class="result__snippet" href="https://www.instagram.com/p/ABC123">'
+            'Onza Marketing con su fundador.</a></div>'
+            '</div></body></html>')
+    _sin_red(monkeypatch, serp=serp, pagina="<html><body><p>Servicios</p></body></html>")
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert not any("instagram" in c.url for c in r["candidatos"]), \
+        [c.url for c in r["candidatos"]]
+
+
+def test_control_positivo_un_medio_de_prensa_SI_sigue_siendo_fuente(monkeypatch):
+    # Sin este control, el filtro podria estar descartando tambien la prensa,
+    # que es uno de los angulos que mas rinde para nombramientos.
+    _sin_red(monkeypatch, pagina="<html><body><p>Servicios</p></body></html>")
+    r = decisor.resolver(EMPRESA, "", "Chile")
+    assert any("df.cl" in c.url for c in r["candidatos"]), [c.url for c in r["candidatos"]]
+
+
+def test_una_palabra_de_contexto_no_se_pega_al_nombre():
+    # MEDIDO: "Invitado Ian Lee" entro como persona desde el titulo de un video.
+    assert personas.es_nombre_de_persona("Invitado Ian Lee") is False
+    assert personas.es_nombre_de_persona("Live Ian Lee") is False
+    # Control positivo: el nombre limpio sigue pasando.
+    assert personas.es_nombre_de_persona("Ian Lee") is True
+
+
+def test_fusiona_dos_lecturas_del_mismo_nombre_en_la_misma_pagina():
+    # MEDIDO: "Karim Pichara" y "Kim Pichara" salieron los dos de notco.ai/about
+    # como si fueran dos CTO. "Kim" no es prefijo de "Karim", asi que la regla
+    # de contencion no las une; dentro de UNA pagina, mismo apellido y misma
+    # inicial es el parser leyendo dos veces.
+    from venara_discovery.normalize import clave_nombre
+    a = _c("Karim Pichara", 1.0, cargo="Co-Founder & CTO")
+    b = _c("Kim Pichara", 0.89, cargo="CTO")
+    a.url = b.url = "https://notco.ai/about"
+    salida = decisor.fusionar_mismo_humano({clave_nombre("Karim Pichara"): a,
+                                            clave_nombre("Kim Pichara"): b})
+    assert len(salida) == 1
+    unico = list(salida.values())[0]
+    assert unico.nombre == "Karim Pichara"
+    assert any("Kim Pichara" in e for e in unico.evidencia)
+
+
+def test_no_fusiona_a_dos_personas_del_mismo_apellido_en_paginas_distintas():
+    # Hermanos o familia duena de la empresa existen. Fusionarlos entre fuentes
+    # distintas borraria a una persona real.
+    from venara_discovery.normalize import clave_nombre
+    a = _c("Cristobal Della Maggiora", 0.65)
+    b = _c("Carlos Della Maggiora", 0.65)
+    a.url = "https://craft.co/x"
+    b.url = "https://otra.cl/y"
+    salida = decisor.fusionar_mismo_humano({clave_nombre(a.nombre): a,
+                                            clave_nombre(b.nombre): b})
+    assert len(salida) == 2
+
+
+def test_distingue_la_pagina_hallada_buscando_de_la_hallada_por_la_home(monkeypatch):
+    # MEDIDO: los candidatos de notco.ai/about salian etiquetados
+    # "sitio_directo" aunque esa pagina se encontro BUSCANDO. La etiqueta hacia
+    # leer la evidencia como si el sistema hubiera entrado solo por la home, y
+    # ocultaba que ese candidato desaparece cuando los buscadores bloquean.
+    home_sin_equipo = "<html><body><a href='/servicios'>Servicios</a></body></html>"
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if url.rstrip("/") == "https://" + DOMINIO:
+            return _Rta(html=home_sin_equipo)
+        if proveedor == "sitio":
+            return _Rta(html=PAGINA)
+        return _Rta(html=SERP)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    desde_pagina = [c for c in r["candidatos"] if c.proveedor == "sitio"]
+    assert desde_pagina, "no se leyo ninguna pagina"
+    assert all(c.angulo == "pagina_desde_busqueda" for c in desde_pagina), \
+        [(c.nombre, c.angulo) for c in desde_pagina]
+
+
+def test_control_positivo_la_home_si_etiqueta_sitio_directo(monkeypatch):
+    # Sin este control, el test de arriba pasaria con un resolutor que etiqueta
+    # todo igual, en la direccion contraria.
+    _sin_red(monkeypatch)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert any(c.angulo == "sitio_directo" for c in r["candidatos"])
+
+
+# ── D8: el contacto viaja con el decisor ────────────────────────────────────
+
+def test_el_resolutor_entrega_el_contacto_junto_al_decisor(monkeypatch):
+    # Confirmar quien decide no sirve de nada si no hay por donde escribirle.
+    _sin_red(monkeypatch)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Santiago, Chile")
+    mejor = r["candidatos"][0]
+    assert mejor.contacto, "el decisor llego sin contacto"
+    # El fixture publica contacto@onzamarketing.cl en el pie: es de la empresa,
+    # y tiene que decirlo en vez de hacerlo pasar por el correo de la persona.
+    assert mejor.contacto["email"] == "contacto@onzamarketing.cl"
+    assert mejor.contacto["email_source"] == "generico"
+    assert mejor.contacto["evidence"]
+
+
+def test_el_endpoint_expone_el_contacto_con_su_procedencia(monkeypatch):
+    _sin_red(monkeypatch)
+    d = cliente.post("/find-decision-maker", json={
+        "company": EMPRESA, "domain": DOMINIO, "location": "Santiago, Chile"}).json()
+    contacto = d["person"]["contact"]
+    assert contacto is not None
+    for campo in ("email", "email_source", "email_confidence", "phone",
+                  "whatsapp", "phone_kind", "evidence"):
+        assert campo in contacto, campo
+
+
+def test_sin_dominio_el_contacto_no_inventa_un_email(monkeypatch):
+    # Sin dominio no hay de donde sacar ni deducir un buzon. Devolver algo
+    # igual seria exactamente la loteria que la regla del repo prohibe.
+    _sin_red(monkeypatch, pagina="<html><body><p>Servicios</p></body></html>")
+    r = decisor.resolver(EMPRESA, "", "Chile")
+    for c in r["candidatos"]:
+        assert c.contacto.get("email") is None, (c.nombre, c.contacto)
+
+
+def test_busca_un_email_del_dominio_cuando_el_sitio_no_publica_ninguno(monkeypatch):
+    """MEDIDO (2026-09-04): fintual.cl y xepelin.com no publican NI UN email.
+
+    Ni un mailto, ni una direccion, en la home ni en ninguna pagina de
+    contacto: usan formulario. El decisor aparecia sin canal, que para el
+    usuario es lo mismo que no haberlo encontrado.
+
+    Cuando el sitio no da muestra, la muestra se busca afuera: una nota de
+    prensa o un directorio publican una direccion del dominio, y con UNA la
+    convencion queda deducida.
+    """
+    equipo = ("<html><head><title>Equipo</title></head><body>"
+              "<h3>Matias Bravo</h3><p>Gerente General</p></body></html>")
+    serp_email = ('<html><body><div class="results"><div class="result">'
+                  '<a class="result__a" href="https://prensa.cl/nota">Onza en la prensa</a>'
+                  '<a class="result__snippet" href="https://prensa.cl/nota">'
+                  'Contacto: paula.torres@onzamarketing.cl</a></div></div></body></html>')
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if proveedor == "sitio":
+            return _Rta(html=equipo)          # el sitio no trae ni un email
+        return _Rta(html=serp_email)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Santiago, Chile")
+    mejor = r["candidatos"][0]
+    assert mejor.nombre == "Matias Bravo"
+    assert mejor.contacto["email"] == "matias.bravo@onzamarketing.cl"
+    assert mejor.contacto["email_source"] == "patron"
+    assert any("paula.torres@onzamarketing.cl" in e for e in mejor.contacto["evidence"])
+
+
+def test_no_gasta_la_busqueda_de_email_si_el_sitio_ya_publica_uno(monkeypatch):
+    # Control del ahorro: con un email a la vista, otra busqueda no agrega nada.
+    consultas = []
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if proveedor == "sitio":
+            return _Rta(html=PAGINA)          # el pie trae contacto@onzamarketing.cl
+        consultas.append(url)
+        return _Rta(html=SERP)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    decisor.resolver(EMPRESA, DOMINIO, "Santiago, Chile")
+    assert not any("%40onzamarketing" in u or "@onzamarketing" in u for u in consultas), \
+        consultas
+
+
+def test_prueba_las_rutas_de_contacto_habituales_si_la_home_no_las_enlaza(monkeypatch):
+    # MEDIDO: ni fintual.cl ni xepelin.com enlazan una pagina con la palabra
+    # "contacto". Probar /contacto y /contact cuesta un fetch y es lo unico que
+    # queda cuando el enlace no existe.
+    pedidas = []
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        pedidas.append(url)
+        if url.endswith("/contacto"):
+            return _Rta(html="<html><body><p>hola@onzamarketing.cl</p></body></html>")
+        if proveedor == "sitio":
+            return _Rta(html="<html><body><a href='/servicios'>Servicios</a>"
+                             "<h3>Matias Bravo</h3><p>Gerente General</p></body></html>")
+        return _Rta(html=SERP)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert any(u.endswith("/contacto") for u in pedidas), pedidas
+
+
+def test_un_vacio_por_timeout_no_se_reporta_como_empresa_sin_decisor(monkeypatch):
+    """MEDIDO (2026-09-04): cuatro empresas reportaron "no_publicado" con el
+    presupuesto agotado a los 25 segundos.
+
+    No es que no publiquen a nadie: los proveedores agotaron el tiempo sin
+    devolver nada. Un timeout NO marca al proveedor como bloqueado -- solo lo
+    hacen el captcha y los status -- asi que desaparecia en silencio y el
+    veredicto mentia. Es el mismo fallo que F1/F4 documentan como el mas caro
+    del servidor viejo, reaparecido por otra puerta.
+    """
+    def _muerto(url, proveedor, salud, timeout=None):
+        return _Rta(html="")          # ni captcha ni status: simplemente nada
+
+    monkeypatch.setattr(decisor, "obtener", _muerto)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert r["candidatos"] == []
+    assert r["diagnostico"]["motivo_vacio"] == "sin_acceso", r["diagnostico"]
+    assert r["diagnostico"]["fetches_fallidos"] > 0
+
+
+def test_control_positivo_una_busqueda_sana_y_vacia_si_dice_no_publicado(monkeypatch):
+    # Sin este control, la regla de arriba pasaria con un resolutor que dice
+    # "sin_acceso" siempre, y se perderia la distincion en el otro sentido.
+    vacio = "<html><body><div class='results'></div></body></html>"
+    _sin_red(monkeypatch, serp=vacio,
+             pagina="<html><body><p>Servicios de marketing</p></body></html>")
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert r["candidatos"] == []
+    assert r["diagnostico"]["motivo_vacio"] == "no_publicado", r["diagnostico"]

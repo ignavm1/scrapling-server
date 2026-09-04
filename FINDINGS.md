@@ -421,3 +421,215 @@ la empresa (1.0) sobre un tercero (0.65).
 
 Consecuencia operativa: un candidato de score 0.65 venido de un tercero vale
 para investigar, no para saludar por nombre sin mirar.
+
+## F23 — En produccion el cuello de botella es el proxy, no el codigo
+
+Medido el 2026-09-03 contra el servicio desplegado en Render (IP de datacenter,
+`/health` reporta `proxy: false`), resolviendo el decisor de seis empresas con
+dominio conocido.
+
+    Xepelin      OK   Sebastian Kreis, CEO   0.975   2.761ms   sin buscar
+    Lagencia     NO   providers_blocked              21.890ms  paginas=0
+    Agencia GL   NO   providers_blocked              21.595ms  paginas=0
+    Agensa       NO   providers_blocked              24.810ms  paginas=0
+    Khipu        NO   providers_blocked              23.980ms  paginas=2
+    Destacame    NO   providers_blocked              21.549ms  paginas=0
+
+**1 de 6 (17%).** El numero no es casualidad: coincide con lo ya medido del lado
+de Venara -- "sitio propio (paginas de equipo) ... 17% da una persona
+identificada". Dos mediciones independientes, con metodos distintos, dan lo
+mismo.
+
+### F23.1 — `paginas=0` no es un fallo del detector
+
+Se verifico sobre el HTML real. `lagencia.cl` sirve 209KB y 59 anclas, y sus 36
+rutas internas son: Inicio, Servicios (x4), Blog, Contacto, Agenda, Politica de
+Privacidad y notas del blog. **No existe pagina de equipo.** Idem agenciagl.cl y
+destacame.cl. La agencia no publica a su gente, y ningun parseo arregla eso.
+
+Donde SI existe, el camino funciona y es barato: Xepelin y Fintual se
+resolvieron en menos de 3 segundos sin gastar una sola busqueda.
+
+### F23.2 — La cobertura del 83% restante depende del proxy
+
+Para las empresas sin pagina de equipo el unico camino es buscar, y desde la IP
+de datacenter de Render los cuatro proveedores devuelven captcha (F1, que ya lo
+habia medido: "0 resultados desde Render"). Por eso las cinco fallidas dicen
+`providers_blocked` y tardan ~22s en decirlo.
+
+**Consecuencia: la palanca mas grande de cobertura hoy no es mas codigo, es
+configurar `PROXY_URL` en Render.** Sin proxy, el sistema entrega el ~17% que da
+el sitio propio; el resto queda a merced de un captcha.
+
+## F24 — CORRIGE A F7: los perfiles SI estan en el indice; el operador y el buscador eran el problema
+
+F7 concluyo, el 2026-08-30, que "los perfiles personales no estan en el indice
+publico". Esa conclusion se **generalizo de mas** y hay que corregirla.
+
+Lo que F7 midio realmente: `site:linkedin.com/in "<empresa>"` en **DuckDuckGo y
+Bing** devuelve cero. Eso sigue siendo cierto.
+
+Lo que se midio el 2026-09-04, sobre la misma empresa, cambiando dos cosas:
+
+    buscador   query                          perfiles /in/ en el HTML
+    brave      "Fintual" CEO linkedin         7
+    bing       "Fintual" CEO linkedin         0
+    ddg        "Fintual" CEO linkedin         (bloqueado)
+
+Brave devuelve siete perfiles. **El indice no era el problema: lo eran el
+operador `site:` y el buscador al que se le preguntaba.** F7 nunca probo Brave
+con la palabra suelta -- Brave se sumo despues, en F19.
+
+### F24.1 — Hay que ENTRAR al perfil; el snippet no alcanza
+
+Brave sirve el titulo del resultado como breadcrumb:
+
+    'LinkedIn cl.linkedin.com in andresmarinkovic Andrés Marinkovic'
+
+Hay nombre y no hay cargo, asi que el parser de SERP no produce nada. El titulo
+de la PAGINA, en cambio, lo trae todo:
+
+    'Andrés Marinkovic - Co Founder y COO en Fintual (YC S18) | LinkedIn'
+
+Se entra sin sesion, sin cookie y sin resolver ningun desafio: LinkedIn sirve el
+`<title>` y el `og:title` a cualquiera. El cuerpo esta detras de un muro de
+sesion y ahi se queda.
+
+### F24.2 — El subdominio de pais resuelve el homonimo
+
+`cl.linkedin.com/in/...` declara Chile. Es lo que faltaba para el falso positivo
+de F23: "Houm" es una empresa chilena y tambien una india, y un directorio
+extranjero le colgo a la chilena dos fundadores ajenos. Cuando el perfil declara
+un pais distinto al pedido, no se atribuye.
+
+### F24.3 — El angulo existia y no se ejecutaba nunca
+
+La primera medicion dio `linkedin=0` en las seis empresas. No era que el angulo
+fallara: **no habia corrido ni una vez**. Con el techo de fetches repartido de
+forma plana, `sitio_equipo` y `cargo_directo` por los cuatro proveedores se
+comian los 8 fetches y las queries de LinkedIn quedaban siempre fuera.
+
+Se reparte por angulo (2 proveedores cada uno): el mismo gasto cubre el doble de
+angulos. Angulos distintos alcanzan documentos distintos; proveedores distintos
+se solapan, y su valor es la resiliencia ante un bloqueo, no la cobertura.
+
+Tras el arreglo, sobre las mismas empresas:
+
+    Betterfly   Cristobal della Maggiora, Co-Founder & President   score 1.0
+    Buk         Jaime Arrieta, Founder                             via perfil
+
+En Betterfly el perfil verificado ademas DESPLAZO al falso positivo de F22.5
+("Eduardo Dillamajora", con el apellido mal escrito por la fuente).
+
+### F24.4 — Google sigue sin servir, y se volvio a medir
+
+No se cito la medicion vieja: el 2026-09-04 se pidio de nuevo
+`"Fintual" CEO site:linkedin.com/in` a Google desde IP residencial. Devuelve
+**92.457 bytes, status 200, cero perfiles y cero resultados extraibles**; el
+veredicto de `blocking.analizar` es `requiere-javascript`. Los resultados no
+estan en el HTML.
+
+Para usar Google literalmente haria falta su **API oficial de Custom Search**
+(una API key y un Search Engine ID). No hay ninguno configurado en el proyecto;
+el `GOOGLE_AI_API_KEY` que existe es de Gemini y no sirve para esto sin crear
+antes el buscador programable.
+
+## F25 — Encontrar al decisor no es alcanzarlo: los sitios ya no publican email
+
+Medido el 2026-09-04. El resolutor encontro a Omar Larre (Fintual) y a Sebastian
+Kreis (Xepelin) con score alto, y los dos quedaron **sin ningun canal de
+contacto**. Para el usuario eso vale lo mismo que no haberlos encontrado.
+
+Se verifico sobre el HTML servido, no se asumio:
+
+    fintual.cl    20.000 chars de texto   0 mailto   0 emails   0 paginas de contacto enlazadas
+    xepelin.com    6.954 chars de texto   0 mailto   0 emails   0 paginas de contacto enlazadas
+
+No es un fallo del parser: **esas empresas no publican correo**. Usan formulario
+o chat. La pagina de contacto ni siquiera esta enlazada con la palabra
+"contacto" desde la home.
+
+### F25.1 — La regla que NO se rompe
+
+De `lib/enrichment/pattern.ts` de Venara: *"nunca construir un email de envio
+sobre un patron que tambien se adivino; cada fallo es un rebote que degrada el
+buzon del cliente"*. Con cero muestras del dominio, adivinar `nombre.apellido@`
+es exactamente eso. No se hace.
+
+Por eso cada email sale con su procedencia:
+
+    publicado  el sitio trae el de ESA persona                    confianza 95
+    patron     deducido de una muestra REAL del dominio, citada   45-80
+    generico   buzon de la empresa, NO de la persona              30
+
+### F25.2 — Dos caminos mas, porque el sitio propio no alcanza
+
+1. **Rutas habituales.** Si la home no enlaza contacto, se prueban `/contacto` y
+   `/contact`. Un fetch, y es lo unico que queda cuando el enlace no existe.
+2. **La muestra se busca afuera.** Si el sitio no publica ninguna direccion, se
+   pregunta `"@<dominio>"` a los buscadores: una nota de prensa o un directorio
+   suelen publicar una. Con UNA muestra la convencion queda deducida y toda
+   persona futura de esa empresa sale gratis.
+
+Los dos caminos estan verificados con oraculos deterministas. **En vivo no se
+pudieron validar**: en la corrida del 2026-09-04 los cuatro proveedores estaban
+en captcha o timeout desde esta IP tras horas de medicion. Es el mismo cuello de
+botella de F23 -- sin `PROXY_URL` el sistema se queda sin buscadores, y aca eso
+significa quedarse sin la muestra.
+
+## F26 — Siete angulos, y elegir por CARGO en vez de por evidencia
+
+### F26.1 — Que se agrego, y por que esos dos
+
+    directorio_ejecutivo   "<empresa>" (executives OR "leadership team" OR
+                           "equipo directivo" OR organigrama)
+    representante_legal    "<empresa>" ("representante legal" OR
+                           "socio fundador" OR "director ejecutivo")
+
+El primero no es una fuente teorica: en la medicion del 2026-09-03 fueron
+craft.co y theorg.com los que dieron al CEO de Buk y al co-fundador de
+Betterfly. Se llegaba ahi por casualidad, desde el angulo de cargo directo;
+ahora se los busca a proposito.
+
+El segundo es el mas LATAM: en licitaciones, avisos y registros publicos la
+empresa declara QUIEN LA REPRESENTA, y esa persona es por definicion la que
+firma. Ningun otro angulo mira esos documentos.
+
+### F26.2 — Con siete angulos, el reparto de fetches vuelve a ser el cuello
+
+Con el reparto anterior (todos los proveedores del primer angulo, despues el
+segundo...) y el techo en 8, **tres de los siete angulos no se ejecutaban
+nunca**. Es exactamente el fallo de F24.3, que ya habia matado al angulo de
+LinkedIn, reaparecido a mayor escala.
+
+Ahora el reparto es POR RONDAS: la ronda 1 le da un proveedor a CADA angulo, la
+ronda 2 reparte el segundo. El techo subio a 12 -- son dos oleadas en paralelo,
+no doce esperas. Hay un test que falla si el techo baja del numero de angulos.
+
+### F26.3 — Se elige al que firma, no al mejor documentado
+
+El score mezcla calidad del cargo con calidad de la evidencia, asi que un
+"Gerente de Marketing" publicado en el sitio propio le ganaba a un "CEO" con
+evidencia mediana. A quien hay que escribirle es al que firma.
+
+La eleccion pasa a ser en dos pasos: **nivel de cargo primero, evidencia solo
+para desempatar dentro del nivel**. Los niveles son fundador > ejecutivo >
+c_level > area > mando > otro, derivados de los pesos que ya estaban medidos.
+
+Con un piso: un cargo alto solo lidera si supera 0.55 de evidencia. Sin el, un
+"CEO" recogido de un blog cualquiera desplazaria a un "Gerente General"
+publicado en el sitio de la empresa. Hay un control que demuestra que sin el
+piso la eleccion se rompe.
+
+### F26.4 — "no publica a nadie" no es lo mismo que "no pudimos mirar", otra vez
+
+La medicion post-cambio devolvio cuatro empresas con motivo **`no_publicado` y
+el presupuesto agotado a los 25 segundos**. No es que no publiquen: los
+proveedores agotaron el tiempo sin devolver nada.
+
+La causa: un fetch caido por timeout NO marca al proveedor como bloqueado --
+solo lo hacen el captcha y los status--, asi que los timeouts desaparecian en
+silencio y el veredicto mentia. Es F1/F4 otra vez, entrando por otra puerta.
+
+Se agrego el motivo **`sin_acceso`** y se cuentan los fetches fallidos. Un
+veredicto de "no publica" ahora exige que de verdad se haya podido mirar.

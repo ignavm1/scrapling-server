@@ -49,9 +49,11 @@ def medir(empresa: str, dominio: str, ubicacion: str) -> dict:
                 "bloqueados": {}}
     diag = r["diagnostico"]
     cands = r["candidatos"]
-    veredicto = ("decisor" if cands
-                 else "bloqueado" if diag["proveedores_bloqueados"]
-                 else "no_publicado")
+# El veredicto lo pone el RESOLUTOR, no este script. Reproducirlo aca
+# significaba repetir su logica -- y cuando el resolutor aprendio a
+# distinguir "no publica" de "no pudimos mirar" (F26.4), el reporte
+# siguio diciendo "no publicado" sobre corridas sin acceso.
+    veredicto = "decisor" if cands else diag.get("motivo_vacio", "sin_datos")
     return {"empresa": empresa, "dominio": dominio, "veredicto": veredicto,
             "candidatos": cands, "bloqueados": diag["proveedores_bloqueados"],
             "fetches": diag["fetches"], "paginas": diag["paginas_visitadas"],

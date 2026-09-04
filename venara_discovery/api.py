@@ -157,6 +157,15 @@ class LinkedInRequest(BaseModel):
     company: str = Field(default="", max_length=config.MAX_QUERY_LEN)
     location: str = Field(default="", max_length=config.MAX_LOCATION_LEN)
     fallback_name: str = Field(default="", max_length=config.MAX_QUERY_LEN)
+    # AGREGADO, no obligatorio: sin dominio el resolutor no puede entrar al
+    # sitio de la empresa, que es el unico camino que funciona cuando los
+    # buscadores bloquean. Medido en produccion el 2026-09-03: con dominio,
+    # Fintual se resuelve en 2,7s sin una sola busqueda; sin dominio, la misma
+    # empresa devuelve NOT_FOUND por captcha de los proveedores.
+    #
+    # Es opcional a proposito: un cliente viejo que no lo manda sigue
+    # funcionando exactamente igual que antes.
+    domain: str = Field(default="", max_length=config.MAX_URL_LEN)
 
 
 @app.get("/health")
@@ -270,13 +279,18 @@ def search_linkedin(req: LinkedInRequest):
     `linkedin_url` se devuelve SIEMPRE vacio, y eso no es una regresion: los
     perfiles personales no estan en el indice publico (F7), asi que el campo
     nunca tuvo con que llenarse. Se conserva porque el cliente lo lee.
+
+    MANDAR `domain` CAMBIA EL RESULTADO, y mucho: habilita el camino que entra
+    al sitio de la empresa, el unico que no depende de que un buscador nos
+    atienda. Sin el, desde una IP de datacenter la respuesta suele ser
+    NOT_FOUND por captcha (F1).
     """
     empresa = req.company.strip()
     if not empresa or empresa in {"NO_COMPANY_FOUND", "NOT_FOUND"}:
         return {"person_name": "NOT_FOUND", "person_title": "",
                 "linkedin_url": "", "source": "no_company"}
 
-    salida = decisor.resolver(empresa, "", req.location.strip(), None, 1)
+    salida = decisor.resolver(empresa, req.domain.strip(), req.location.strip(), None, 1)
     diag = salida["diagnostico"]
     if not salida["candidatos"]:
         return {"person_name": "NOT_FOUND", "person_title": "", "linkedin_url": "",
@@ -374,6 +388,17 @@ def find_decision_maker(req: DecisionMakerRequest):
 
     Devuelve `found: false` con un `reason` cuando no encuentra: "no_publicado"
     y "providers_blocked" mandan a hacer cosas distintas.
+
+    EL CONTACTO viaja en `person.contact`, y cada dato dice de donde salio:
+
+        email_source "publicado"  el sitio trae el email de ESA persona (95)
+                     "patron"     deducido de una muestra real del dominio,
+                                  citada en `evidence` (45-80)
+                     "generico"   buzon de la empresa, NO de la persona (30)
+
+    Nunca se construye un email sin una muestra del dominio: un patron
+    adivinado mas un nombre es loteria, y cada rebote degrada el buzon del
+    cliente. `whatsapp` solo se llena si el numero es movil.
     """
     empresa = req.company.strip()
     if not empresa or empresa in {"NO_COMPANY_FOUND", "NOT_FOUND"}:
