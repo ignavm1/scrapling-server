@@ -36,7 +36,7 @@ una empresa homonima de otro pais.
 - [x] G5: el resolutor integra el angulo sin romper el camino del sitio propio, que es el que mejor rinde
   CHECK: .venv/bin/python -m pytest -q tests/test_decisor.py && echo G5_OK
   EXPECT: G5_OK
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=3df037183c87d56f857199530b683ca5ca46025796d56bc2d34efb35a59e2e3e; output-bytes=620
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=b4496b5d92375143a2e6aa303b0e87645563180178acb0bfc32dcd0fb324aa73; output-bytes=620
 
 - [x] G6: la suite completa del servidor sigue verde
   CHECK: .venv/bin/python -m pytest -q && echo G6_OK
@@ -46,7 +46,7 @@ una empresa homonima de otro pais.
 - [x] G7: la medicion en vivo sobre empresas reales produce un veredicto decisivo por empresa y lo deja escrito en un reporte
   CHECK: bash bench/medir_linkedin.sh
   EXPECT: MEDICION REGISTRADA
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=2c3b2e62e1a54da7f08b99a4d3fde23ad31fbc371e1e04d56fabecb362306028; output-bytes=20772
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=bc550528e793b452571335e1a3fd4a2d535d9c9959a96ba8f3e8653ec8699101; output-bytes=21312
 
 - [x] G8: el pedido de "buscar en Google" queda resuelto con medicion FRESCA, no citando una vieja -- se verifica hoy que Google no sirve resultados por HTTP y que el sistema no depende de el
   CHECK: .venv/bin/python -m pytest -q tests/test_linkedin_perfil.py -k "google" && echo G8_OK

@@ -6,10 +6,10 @@ en cada corrida.
 
 | Empresa | Dominio | Veredicto | Decisores | Fetches | Paginas | Crudos | Bloqueados | ms |
 |---|---|---|---|---|---|---|---|---|
-| Fintual | fintual.cl | decisor | 1 | 4 | 3 | 0 | — | 5194 |
-| Buk | buk.cl | no_publicado | 0 | 5 | 3 | 0 | — | 25004 |
-| Betterfly | betterfly.com | no_publicado | 0 | 5 | 3 | 0 | — | 25008 |
-| Toteat | toteat.com | no_publicado | 0 | 5 | 1 | 0 | — | 25002 |
+| Fintual | fintual.cl | decisor | 1 | 4 | 3 | 0 | — | 5185 |
+| Buk | buk.cl | sin_acceso | 0 | 6 | 3 | 0 | — | 25007 |
+| Betterfly | betterfly.com | sin_acceso | 0 | 5 | 3 | 0 | — | 25004 |
+| Toteat | toteat.com | sin_acceso | 0 | 5 | 1 | 0 | — | 25009 |
 
 **Empresas con decisor encontrado: 1 de 4 (1 personas).**
 

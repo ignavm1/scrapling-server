@@ -17,17 +17,17 @@ un NOT_FOUND que dice por que.
 - [x] G1: el plan ataca el indice desde angulos DISTINTOS — incluye "<empresa> CEO" y "<empresa> gerente", aprovecha el dominio cuando se conoce, y ninguna query usa linkedin.com/in (con control positivo que planta una prohibida)
   CHECK: .venv/bin/python -m pytest -q tests/test_decisor.py -k "plan or angulo or query or linkedin" && echo G1_OK
   EXPECT: G1_OK
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=9fb3a30395db4f883be71baaca8afb9fd285221c4e985da2b65fe1b8ef73c091; output-bytes=635
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=89e76dc692245bbe98217174940f343658b5bc785ad3f3887564a86690b4e4ff; output-bytes=635
 
 - [x] G2: extrae decisores del TEXTO de una pagina de equipo, no solo del snippet — que es donde F21 midio que estan los nombres — y no inventa personas en una pagina sin gente
   CHECK: .venv/bin/python -m pytest -q tests/test_decisor.py -k "pagina or texto" && echo G2_OK
   EXPECT: G2_OK
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=1fca5e76ba1cabb5ad956137fd9454f07e566cff0aee831adacb26b8022782e4; output-bytes=635
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=5e44317468066a3e143062cbd12b3684a45aaa6c4bc1e44a21a00928a1d4f677; output-bytes=635
 
 - [x] G3: el ranking prefiere la evidencia mas fuerte — el sitio propio de la empresa gana sobre un tercero, el cargo que decide gana sobre el que no, y un candidato cuya empresa no aparece en ningun lado se descarta
   CHECK: .venv/bin/python -m pytest -q tests/test_decisor.py -k "ranking or prefiere or descarta" && echo G3_OK
   EXPECT: G3_OK
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=7f96ed5a3bf4e24ec751ccf8170a7e97c7171c091ac2bda1f75a08c4166b2b80; output-bytes=634
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=35d29415ad1702f7e4a25d831cd79f0a5242aa44b3a34d3ba9ed504c3b049a91; output-bytes=634
 
 - [x] G4: el resolutor completo encuentra al decisor sin tocar la red, y cuando no lo encuentra distingue "no publicado" de "los buscadores bloquearon"
   CHECK: .venv/bin/python -m pytest -q tests/test_decisor.py -k "resolver or motivo or bloque" && echo G4_OK
@@ -42,22 +42,22 @@ un NOT_FOUND que dice por que.
 - [x] G6: una consulta no puede volver a costar 4m43s — el gasto esta acotado por techo de fetches, presupuesto de tiempo y tope de paginas visitadas, y hay un control que falla si esos topes desaparecen
   CHECK: .venv/bin/python -m pytest -q tests/test_decisor.py -k "presupuesto or techo or tope or gasto" && echo G6_OK
   EXPECT: G6_OK
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=d2abd3a174db0e9f141e719613dac5fa3a25c294cd3ee33601ea8d92aa4d84b2; output-bytes=634
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=781001d139c7dbabb7d626383c3d756f337351433b0043e4f7bcb80558d6365d; output-bytes=634
 
 - [x] G7: la suite completa del servidor sigue verde, incluidos los tests que ya existian
   CHECK: .venv/bin/python -m pytest -q && echo G7_OK
   EXPECT: G7_OK
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=dec84283109221f6343da25fa0d3bc8c0c18c07d952bc3320cde1cdfc5be914f; output-bytes=1022
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=3b7216c79b73fb3dcaac70dcfdc36c2e7c86cb3de1e2d4cf5ba849ff76ededa5; output-bytes=1022
 
 - [x] G8: la medicion en vivo sobre empresas reales produce un veredicto decisivo (decisores encontrados, o proveedores bloqueados nombrados) y lo deja escrito en un reporte
   CHECK: bash bench/medir_decisor.sh
   EXPECT: MEDICION REGISTRADA
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=2bb4cd6cd91de082c4afc481f86c21637463ff68c1799997b5a683528ec197c5; output-bytes=14638
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=4ad415d727e21b3a9e66fab7ea803ad1e7fcdf181ec836398aa135c4da72edea; output-bytes=15178
 
 - [x] G9: el pedido explicito de "buscar en Google" queda resuelto de forma honesta — se verifica contra el fixture capturado que Google no sirve resultados en el HTML, el sistema NO depende de el, y sigue funcionando con los buscadores que si responden
   CHECK: .venv/bin/python -m pytest -q tests/test_decisor.py -k "google" && echo G9_OK
   EXPECT: G9_OK
-  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=9b12e1583aef9702b61c7082e232009da2d9fc13a4f194ddfdcc47dd597e61b7; output-bytes=634
+  EVIDENCE: exit=0; shell=/bin/sh; cwd=/Users/ignaciovenegas/Desktop/scrapling-server; path=e95c5e8a51af/24 entries; EXPECT=matched; output-sha256=073b73ed0bcaf99cdc46434996576c3e0cc1f7b5e6b0a1793058ea122bc91a17; output-bytes=634
 
 - [x] G11: los falsos positivos que aparecieron en la medicion en vivo no vuelven — un cargo ("Chief Economist") ni una razon social ("Betterfly's Co") entran como persona — con control positivo de los decisores reales que la MISMA corrida encontro
   CHECK: .venv/bin/python -m pytest -q tests/test_personas.py -k "cargo_ni_una_razon or decisores_reales_medidos" && echo G11_OK
