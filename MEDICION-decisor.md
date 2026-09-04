@@ -6,12 +6,12 @@ en cada corrida.
 
 | Empresa | Dominio | Veredicto | Decisores | Fetches | Paginas | Crudos | Bloqueados | ms |
 |---|---|---|---|---|---|---|---|---|
-| Fintual | fintual.cl | decisor | 1 | 3 | 2 | 0 | — | 2797 |
-| Buk | buk.cl | decisor | 2 | 12 | 3 | 90 | duckduckgo, ddglite | 5481 |
-| Betterfly | betterfly.com | decisor | 2 | 12 | 3 | 90 | ddglite, duckduckgo | 5501 |
-| Toteat | toteat.com | bloqueado | 0 | 10 | 1 | 20 | brave, duckduckgo, ddglite | 4374 |
+| Fintual | fintual.cl | decisor | 1 | 3 | 2 | 0 | — | 2799 |
+| Buk | buk.cl | decisor | 2 | 12 | 3 | 94 | ddglite, duckduckgo | 5723 |
+| Betterfly | betterfly.com | bloqueado | 0 | 12 | 3 | 55 | ddglite, duckduckgo, brave | 5524 |
+| Toteat | toteat.com | bloqueado | 0 | 10 | 1 | 20 | duckduckgo, ddglite, brave | 3537 |
 
-**Empresas con decisor encontrado: 3 de 4 (5 personas).**
+**Empresas con decisor encontrado: 2 de 4 (3 personas).**
 
 ## Fintual
 
@@ -31,19 +31,11 @@ en cada corrida.
   - cargo: Co-Founder (1.00)
   - el texto nombra a la empresa buscada
 
-## Betterfly
-
-- **Cristobal Della Maggiora** — Co-Founder · score 0.65 · via cargo_directo/brave · https://craft.co/betterfly-209/executives
-  - cargo: Co-Founder (1.00)
-  - el texto nombra a la empresa buscada
-- **Eduardo Dillamajora** — founder · score 0.65 · via cargo_directo/brave · https://qedinvestors.com/blog/podcast-betterfly-ceo-eduardo-della-maggiora-discusses-his-journey-to-disrupting-the-delivery-of-both-physical-and-financial-wellbeing-at-scale
-  - cargo: founder (1.00)
-  - el texto nombra a la empresa buscada
-
 ## Corridas que no pudieron mirar
 
 Un vacio por bloqueo **no** significa que la empresa no publique a su
 decisor. Sin `PROXY_URL` los buscadores bloquean a los pocos requests
 (F1) y queda solo Bing, ya clasificado como fuente hostil (F6).
 
-- Toteat: brave=captcha, duckduckgo=status-403, ddglite=status-403
+- Betterfly: ddglite=captcha, duckduckgo=captcha, brave=captcha
+- Toteat: duckduckgo=captcha, ddglite=captcha, brave=captcha

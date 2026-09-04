@@ -521,3 +521,27 @@ def test_no_fusiona_por_un_nombre_de_pila_corto():
     entrada = {clave_nombre("Ana Diaz"): _c("Ana Diaz", 0.7),
                clave_nombre("Anabel Soto"): _c("Anabel Soto", 0.6)}
     assert len(decisor.fusionar_mismo_humano(entrada)) == 2
+
+
+def test_search_linkedin_usa_el_sitio_cuando_le_pasan_el_dominio(monkeypatch):
+    # MEDIDO EN PRODUCCION (2026-09-03): sin dominio, `/search-linkedin`
+    # devolvia NOT_FOUND por captcha de los proveedores; con dominio, la misma
+    # empresa se resuelve entrando al sitio, sin una sola busqueda. El campo es
+    # el que separa esos dos resultados.
+    todos = {p.nombre: "captcha" for p in providers.activos()}
+    _sin_red(monkeypatch, bloqueados=todos)
+    d = cliente.post("/search-linkedin", json={
+        "company": EMPRESA, "domain": DOMINIO, "location": "Chile"}).json()
+    assert d["person_name"] == "Matias Bravo", d
+    # La forma historica no se toca: el cliente lee estos campos por nombre.
+    assert set(d) >= {"person_name", "person_title", "linkedin_url", "source"}
+
+
+def test_search_linkedin_sin_dominio_sigue_comportandose_como_siempre(monkeypatch):
+    # `domain` es opcional: un cliente viejo que no lo manda no puede romperse.
+    todos = {p.nombre: "captcha" for p in providers.activos()}
+    todos["sitio"] = "captcha"
+    _sin_red(monkeypatch, bloqueados=todos)
+    d = cliente.post("/search-linkedin", json={"company": EMPRESA}).json()
+    assert d["person_name"] == "NOT_FOUND"
+    assert set(d) >= {"person_name", "person_title", "linkedin_url", "source"}
