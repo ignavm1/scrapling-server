@@ -1,0 +1,574 @@
+"""Resolutor de decisor: de un NOMBRE DE EMPRESA a la persona que decide.
+
+QUE RESUELVE, Y POR QUE NO ALCANZABA LO QUE HABIA
+
+`linkedin.buscar_persona()` intentaba esto con tres queries en serie contra
+`site:linkedin.com/in`, sin techo ni presupuesto. Medido contra produccion: una
+sola consulta tardaba **4m43s** y devolvia NOT_FOUND, porque los perfiles
+personales no estan en el indice publico (F7). Buscaba en el unico lugar donde
+esta demostrado que no hay nada, y tardaba una eternidad en no encontrarlo.
+
+LOS ANGULOS
+
+El indice no responde igual a la misma pregunta hecha de formas distintas. Una
+sola query encuentra siempre lo mismo; varias, cada una apuntando a una
+superficie distinta, encuentran gente que ninguna sola alcanza:
+
+  cargo_directo   "<empresa>" CEO / gerente general / fundador
+  sitio_equipo    site:<dominio> (equipo OR nosotros OR "quienes somos")
+  prensa          "<empresa>" ("asume como" OR "es el nuevo" OR "fue designado")
+  entrevista      "<empresa>" entrevista (fundador OR CEO OR gerente)
+  pagina          el TEXTO de la pagina de equipo del propio sitio
+
+El ultimo no es una query: es una VISITA. Esta medido (F21) que el snippet de un
+buscador casi nunca dice "Nombre - Cargo - Empresa" -- 67 resultados crudos
+dieron un candidato, y era falso. Los nombres estan dentro de la pagina, y la
+unica forma de leerlos es entrar.
+
+LA REGLA QUE EVITA EL FALSO POSITIVO
+
+Un candidato necesita quedar LIGADO a la empresa por una de dos vias: o salio
+del sitio propio de la empresa, o el texto donde aparece nombra a la empresa.
+Sin ninguna de las dos se descarta, por mas que el cargo sea perfecto. Un
+decision maker equivocado en una campana de outbound es peor que ninguno: se le
+escribe a una persona real, a nombre del cliente, sobre una empresa que no es la
+suya.
+"""
+from __future__ import annotations
+import concurrent.futures
+import logging
+import re
+import time
+from urllib.parse import urljoin, urlsplit
+from dataclasses import dataclass, field
+
+from . import config, extraction, personas, providers, website
+from .fetch import SaludProveedores, obtener
+from .linkedin import puntuar_cargo
+from .location import Ubicacion, interpretar
+from .normalize import clave_nombre, sin_acentos
+
+log = logging.getLogger(__name__)
+
+# Cargos que se preguntan de forma directa. Son los que firman en una PyME
+# LATAM; preguntar por "coordinador" gastaria un angulo en quien no decide.
+CARGOS_DIRECTOS = ["CEO", "gerente general", "fundador", "director comercial"]
+
+# Cuantos angulos de cargo directo se arman. Cada uno cuesta un fetch por
+# proveedor, y DECISOR_MAX_FETCHES corta antes de que sean gratis.
+MAX_CARGOS_DIRECTOS = 3
+
+# Score a partir del cual no se sale a buscar. Un candidato que llega aca ya
+# tiene cargo de decisor Y esta publicado en el sitio de la propia empresa: ocho
+# busquedas encima no lo mejoran, y si queman el presupuesto de scraping del
+# lote entero, porque esto se llama UNA VEZ POR EMPRESA.
+UMBRAL_SUFICIENTE = 0.85
+
+
+@dataclass(frozen=True)
+class Angulo:
+    nombre: str
+    query: str
+    prioridad: int
+
+
+@dataclass
+class Candidato:
+    nombre: str
+    cargo: str
+    url: str
+    angulo: str
+    proveedor: str
+    # 'sitio_propio' cuando el dominio es de la empresa buscada; si no, 'tercero'.
+    origen: str
+    # 'pagina' cuando salio del texto de la pagina; 'titulo'/'snippet' del SERP.
+    donde: str
+    empresa_en_texto: bool
+    score: float = 0.0
+    evidencia: list[str] = field(default_factory=list)
+
+    def a_dict(self) -> dict:
+        return {
+            "person_name": self.nombre,
+            "person_title": self.cargo,
+            "url": self.url,
+            "angle": self.angulo,
+            "source": self.proveedor,
+            "origin": self.origen,
+            "found_in": self.donde,
+            "confidence": round(self.score, 3),
+            "evidence": self.evidencia,
+        }
+
+
+def construir_plan(empresa: str, dominio: str, ubi: Ubicacion,
+                   cargos: list[str] | None = None) -> list[Angulo]:
+    """Los angulos de ataque, ordenados por lo que mas rinde por request.
+
+    Ninguno usa `site:linkedin.com/in`: esta medido que devuelve cero perfiles
+    con control positivo (el MISMO operador sobre /company devuelve diez). Un
+    angulo que no puede traer nada es un angulo menos para los que si pueden.
+    """
+    e = (empresa or "").strip()
+    d = (dominio or "").strip().lower().replace("https://", "").replace("http://", "")
+    d = d.replace("www.", "").split("/")[0]
+    lugar = ubi.ciudad or ubi.pais_nombre or ""
+    lista = [c.strip() for c in (cargos or CARGOS_DIRECTOS) if c and c.strip()]
+    lista = lista[:MAX_CARGOS_DIRECTOS] or CARGOS_DIRECTOS[:1]
+
+    plan: list[Angulo] = []
+
+    # 1) El sitio propio primero. Es la fuente con menos ruido que existe: si la
+    #    empresa publica a su equipo, ahi esta, con el cargo escrito por ella.
+    if d:
+        plan.append(Angulo("sitio_equipo",
+                           f'site:{d} (equipo OR nosotros OR "quienes somos")', 1))
+    else:
+        plan.append(Angulo("sitio_equipo",
+                           f'"{e}" ("nuestro equipo" OR "quienes somos")', 1))
+
+    # 2) La pregunta directa, que es la que pidio el usuario: "<empresa> CEO".
+    for i, cargo in enumerate(lista):
+        plan.append(Angulo("cargo_directo", f'"{e}" {cargo}', 2 + i))
+
+    # 3) Prensa de nombramientos: nombra persona, cargo y empresa en una frase.
+    plan.append(Angulo("prensa",
+                       f'"{e}" ("asume como" OR "es el nuevo" OR "fue designado")', 6))
+
+    # 4) Entrevistas: el fundador hablando de su propia empresa.
+    plan.append(Angulo("entrevista",
+                       f'"{e}" entrevista (fundador OR CEO OR "gerente general")'
+                       + (f" {lugar}" if lugar else ""), 7))
+
+    return plan
+
+
+# Palabras del nombre de una empresa que no la identifican. "Marketing" aparece
+# en cualquier pagina del rubro, asi que encontrarla no prueba nada.
+_PALABRAS_GENERICAS = {
+    "agencia", "agency", "grupo", "group", "studio", "estudio", "consultora",
+    "consulting", "marketing", "digital", "empresa", "servicios", "soluciones",
+    "compania", "corporacion", "holding", "spa", "sac", "sas", "ltda", "srl",
+}
+
+
+def _normalizar_palabras(texto: str) -> str:
+    """Texto -> palabras separadas por un espacio, sin acentos ni puntuacion.
+
+    NO se usa `clave_nombre()` aca, y la diferencia importa: esa funcion esta
+    hecha para un NOMBRE corto -- pasa por `limpiar_titulo()`, que recorta en el
+    primer separador. Aplicada al texto de una pagina entera devolvia
+    "nuestroequipo" y toda liga con la empresa daba False.
+    """
+    return " " + re.sub(r"[^a-z0-9]+", " ", sin_acentos(texto or "").lower()).strip() + " "
+
+
+def _liga_con_la_empresa(texto: str, empresa: str) -> bool:
+    """El texto nombra a la empresa buscada?
+
+    Es la mitad de la regla anti-falso-positivo. La otra mitad es que la URL
+    pertenezca al dominio de la empresa. Sin ninguna de las dos, el candidato
+    es "un gerente que el buscador relaciono por casualidad".
+    """
+    t = _normalizar_palabras(texto)
+    e = _normalizar_palabras(empresa).strip()
+    if not e:
+        return False
+    # El nombre completo, palabra por palabra: la prueba mas fuerte.
+    if " " + e + " " in t:
+        return True
+    # Si no, alcanza un token DISTINTIVO del nombre. Se exige que no sea
+    # generico: "marketing" aparece en toda pagina del rubro y encontrarlo
+    # ligaria a la empresa con su competencia entera.
+    for palabra in e.split():
+        if len(palabra) > 3 and palabra not in _PALABRAS_GENERICAS:
+            if " " + palabra + " " in t:
+                return True
+    return False
+
+
+# Pesos del score. Suman EXACTAMENTE 1.0 y esa es la razon de que existan como
+# constantes en vez de numeros sueltos: la primera version sumaba el peso del
+# cargo (hasta 1.0) mas los bonus, y saturaba en 1.0 antes de terminar de
+# contar. El efecto no era cosmetico -- dos candidatos que debian ordenarse
+# quedaban empatados, y el empate se daba justo entre los candidatos fuertes,
+# que es donde el orden importa.
+PESO_CARGO = 0.50
+PESO_SITIO_PROPIO = 0.25
+PESO_EMPRESA_EN_TEXTO = 0.15
+PESO_LEIDO_DE_PAGINA = 0.10
+
+
+def puntuar(c: Candidato) -> Candidato:
+    """Score y evidencia legible.
+
+    Suma ponderada de senales, no promedio: un promedio deja que el cargo
+    perfecto tape la ausencia total de liga con la empresa. La mitad del score
+    la pone el cargo y la otra mitad la PROCEDENCIA, porque un "CEO" leido en
+    un blog cualquiera y uno leido en el /equipo de la empresa no valen igual
+    aunque digan la misma palabra.
+    """
+    peso_cargo = puntuar_cargo(c.cargo)
+    s = PESO_CARGO * peso_cargo
+    ev = [f"cargo: {c.cargo or 'sin cargo'} ({peso_cargo:.2f})"]
+
+    if c.origen == "sitio_propio":
+        # La senal mas fuerte disponible sin pagar: la empresa lo publica en su
+        # propio dominio. Nadie pone al gerente de otra empresa en su /equipo.
+        s += PESO_SITIO_PROPIO
+        ev.append("publicado en el sitio de la propia empresa")
+    if c.empresa_en_texto:
+        s += PESO_EMPRESA_EN_TEXTO
+        ev.append("el texto nombra a la empresa buscada")
+    if c.donde == "pagina":
+        # Leido del cuerpo de la pagina, no de un resumen del buscador que pudo
+        # mezclar dos resultados.
+        s += PESO_LEIDO_DE_PAGINA
+        ev.append("leido del texto de la pagina, no del snippet")
+
+    c.score = round(min(1.0, s), 3)
+    c.evidencia = ev
+    return c
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Entrar por el sitio, sin pasar por ningun buscador
+# ─────────────────────────────────────────────────────────────────────────────
+# MEDIDO EL 2026-09-03: `site:fintual.cl (equipo OR nosotros)` en Bing devolvio
+# diez resultados de zhihu.com y foros franceses sobre Instagram. Bing ignora el
+# operador y sirve cualquier cosa (F6), y los demas proveedores estaban en
+# captcha (F1). Con eso, un resolutor que solo sabe buscar no encuentra nada,
+# por mas angulos que tenga.
+#
+# Pero cuando se conoce el dominio no hace falta ningun buscador: la pagina de
+# equipo esta enlazada desde la home. Este camino no depende de nadie mas que
+# del sitio del propio prospecto, que es justamente quien SI quiere ser leido.
+_RX_ENLACE = re.compile(r'<a\b[^>]*\bhref=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+_RX_TAGS = re.compile(r"<[^>]+>")
+
+
+def _texto_ancla(fragmento: str) -> str:
+    return re.sub(r"\s+", " ", _RX_TAGS.sub(" ", fragmento or "")).strip()
+
+
+def _paginas_del_sitio(dominio: str, salud: SaludProveedores) -> tuple[list[str], int]:
+    """Paginas de equipo enlazadas desde la home. Devuelve (urls, fetches).
+
+    Un fetch a la home compra hasta DECISOR_MAX_PAGINAS candidatas, y ninguna
+    depende de que un buscador nos atienda.
+    """
+    if not dominio:
+        return [], 0
+    base = "https://" + dominio
+    r = obtener(base + "/", "sitio", salud, timeout=config.DECISOR_FETCH_TIMEOUT)
+    if not r.html:
+        return [], 1
+
+    urls: list[str] = []
+    vistas: set[str] = set()
+    for m in _RX_ENLACE.finditer(r.html):
+        href = (m.group(1) or "").strip()
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        # urljoin y no concatenacion a mano: la primera version armaba
+        # `base + href.lstrip("./")` y `lstrip` come TAMBIEN la barra inicial,
+        # asi que "/nuestro-equipo" producia "https://onzamarketing.clnuestro-equipo".
+        # El error no rompia nada visible -- solo hacia que el fetch fallara y
+        # la pagina de equipo no se leyera nunca.
+        url = urljoin(base + "/", href).split("#")[0]
+        # Solo el dominio propio: seguir un enlace externo desde la home lleva
+        # al equipo de otra empresa, o a una red social.
+        host = urlsplit(url).hostname or ""
+        if not (host == dominio or host.endswith("." + dominio)):
+            continue
+        if url in vistas:
+            continue
+        if not personas.es_pagina_de_personas(url, _texto_ancla(m.group(2))):
+            continue
+        vistas.add(url)
+        urls.append(url)
+        if len(urls) >= config.DECISOR_MAX_PAGINAS:
+            break
+    return urls, 1
+
+
+def _paginas_a_visitar(items: list[tuple[dict, str, str]], empresa: str,
+                       dominio: str) -> list[str]:
+    """URLs del SITIO DE LA EMPRESA que parecen listar gente.
+
+    Solo del sitio propio: entrar a la pagina de equipo de un tercero gasta un
+    fetch para leer el equipo de otra empresa.
+    """
+    urls: list[str] = []
+    vistas: set[str] = set()
+    for it, _ang, _prov in items:
+        url = it.get("url", "")
+        if not url or url in vistas:
+            continue
+        if personas.es_perfil_linkedin(url):
+            continue
+        propio = website.pertenece_a(url, empresa) >= 0.8
+        if dominio and dominio in url.lower():
+            propio = True
+        if not propio:
+            continue
+        if not personas.es_pagina_de_personas(url, it.get("titulo", "")):
+            continue
+        vistas.add(url)
+        urls.append(url)
+        if len(urls) >= config.DECISOR_MAX_PAGINAS:
+            break
+    return urls
+
+
+
+# Largo minimo para aceptar que un nombre corto esta contenido en uno largo.
+# Con menos, "Ana" fusionaria con "Ana Maria Rojas Perez" -- y tambien con
+# "Anabel Soto", que es otra persona.
+MIN_CLAVE_PARA_FUSION = 8
+
+
+def fusionar_mismo_humano(candidatos: dict[str, Candidato]) -> dict[str, Candidato]:
+    """Une las formas del MISMO nombre en un solo candidato.
+
+    MEDIDO EN VIVO (2026-09-03): la corrida sobre Buk devolvio "Jaime Arrieta" y
+    "Jaime Arrieta Boetsch" como dos decisores. Son la misma persona, y dos
+    leads de la misma persona son dos mensajes al mismo humano a nombre del
+    cliente.
+
+    Gana el de mayor score; si empatan, el nombre mas largo, que es el mas
+    completo para saludar.
+    """
+    claves = sorted(candidatos, key=len, reverse=True)
+    fusionadas: dict[str, Candidato] = {}
+    for k in claves:
+        c = candidatos[k]
+        destino = None
+        for otra in fusionadas:
+            corto, largo = (k, otra) if len(k) <= len(otra) else (otra, k)
+            if len(corto) >= MIN_CLAVE_PARA_FUSION and corto in largo:
+                destino = otra
+                break
+        if destino is None:
+            fusionadas[k] = c
+            continue
+        actual = fusionadas[destino]
+        gana = (c.score > actual.score
+                or (c.score == actual.score and len(c.nombre) > len(actual.nombre)))
+        if gana:
+            # Se conserva la evidencia de las dos vistas: que la misma persona
+            # aparezca en dos fuentes es informacion, no ruido.
+            c.evidencia = c.evidencia + [f"tambien visto como \"{actual.nombre}\""]
+            fusionadas[destino] = c
+        else:
+            actual.evidencia = actual.evidencia + [f"tambien visto como \"{c.nombre}\""]
+    return fusionadas
+
+
+def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
+             cargos: list[str] | None = None, limite: int = 5) -> dict:
+    """Encuentra al decisor de UNA empresa. Devuelve candidatos + diagnostico.
+
+    EL ORDEN NO ES ARBITRARIO. Primero se entra al sitio de la empresa, y solo
+    si eso no alcanza se gastan busquedas. Medido el 2026-09-03: los buscadores
+    o estaban en captcha o servian resultados de otro planeta (`site:fintual.cl
+    equipo` en Bing devolvio foros franceses sobre Instagram). El sitio del
+    propio prospecto es la unica fuente que siempre atiende, y ademas es la que
+    menos ruido tiene: nadie publica al gerente de otra empresa en su /equipo.
+
+    Igual que el resto del servidor: una busqueda que no pudo mirar NO es una
+    busqueda sin resultados.
+    """
+    t0 = time.monotonic()
+    empresa = (empresa or "").strip()
+    if len(empresa) < 2:
+        return {"candidatos": [], "completo": False,
+                "diagnostico": {"motivo_vacio": "no_company", "ms": 0,
+                                "proveedores_bloqueados": {}, "angulos": [],
+                                "queries": [], "fetches": 0, "crudos": 0,
+                                "paginas_visitadas": 0, "candidatos": 0,
+                                "busco_en_internet": False, "completo": False}}
+
+    ubi = interpretar(ubicacion)
+    dominio = (dominio or "").strip().lower()
+    dominio = dominio.replace("https://", "").replace("http://", "")
+    dominio = dominio.replace("www.", "").split("/")[0]
+    plan = construir_plan(empresa, dominio, ubi, cargos)
+    activos = providers.activos()
+    salud = SaludProveedores()
+
+    candidatos: dict[str, Candidato] = {}
+    visitadas: set[str] = set()
+    fetches = 0
+    crudos: list[tuple[dict, str, str]] = []
+    por_proveedor: dict[str, int] = {}
+
+    def agregar(c: Candidato) -> None:
+        # Se exige la liga con la empresa. Sin ella el candidato es "un gerente
+        # que el buscador relaciono por casualidad" -- y ese falso positivo
+        # cuesta un correo real, a nombre del cliente, a quien no corresponde.
+        if c.origen != "sitio_propio" and not c.empresa_en_texto:
+            return
+        k = clave_nombre(c.nombre)
+        if not k:
+            return
+        puntuar(c)
+        previo = candidatos.get(k)
+        if previo is None or c.score > previo.score:
+            candidatos[k] = c
+
+    def leer_pagina(url: str) -> None:
+        nonlocal fetches
+        if url in visitadas:
+            return
+        visitadas.add(url)
+        r = obtener(url, "sitio", salud, timeout=config.DECISOR_FETCH_TIMEOUT)
+        fetches += 1
+        if not r.html:
+            return
+        # Por BLOQUES, no aplanado: en una pagina de equipo el nombre y el
+        # cargo son dos elementos distintos, y pegados no se distinguen de una
+        # frase cualquiera.
+        texto = website.texto_por_bloques(r.html)
+        liga = _liga_con_la_empresa(texto, empresa)
+        for p in personas.extraer_de_texto(texto, url):
+            agregar(Candidato(
+                nombre=p["person_name"], cargo=p["person_title"], url=url,
+                angulo="sitio_directo", proveedor="sitio",
+                origen="sitio_propio", donde="pagina", empresa_en_texto=liga))
+
+    # ── Fase 1: el sitio de la empresa, sin pasar por ningun buscador ────────
+    enlazadas, gasto = _paginas_del_sitio(dominio, salud)
+    fetches += gasto
+    for url in enlazadas:
+        if time.monotonic() - t0 > config.DECISOR_BUDGET_S:
+            break
+        leer_pagina(url)
+
+    candidatos = fusionar_mismo_humano(candidatos)
+    mejor_ahora = max((c.score for c in candidatos.values()), default=0.0)
+    if mejor_ahora >= UMBRAL_SUFICIENTE:
+        # Ya hay un decisor con evidencia fuerte. Gastar ocho busquedas encima
+        # no lo mejora y si quema el presupuesto de scraping del lote.
+        ordenados = sorted(candidatos.values(), key=lambda c: -c.score)[:limite]
+        diag = _diagnostico(plan, {}, salud, 0, fetches, len(visitadas),
+                            len(candidatos), t0, busco=False)
+        log.info("decisor '%s' -> %d desde el sitio, sin buscar, en %dms",
+                 empresa, len(ordenados), diag["ms"])
+        return {"candidatos": ordenados, "completo": True, "diagnostico": diag}
+
+    # ── Fase 2: los buscadores ───────────────────────────────────────────────
+    trabajos = [(a, p) for a in plan for p in activos]
+    trabajos.sort(key=lambda t: (t[0].prioridad, t[1].prioridad))
+    descartados_por_techo = max(0, len(trabajos) - config.DECISOR_MAX_FETCHES)
+    trabajos = trabajos[: config.DECISOR_MAX_FETCHES]
+
+    def tarea(ang: Angulo, prov):
+        url = providers.construir_url(prov.nombre, ang.query, ubi)
+        # Timeout propio, mas corto que el global: Scrapling reintenta 3 veces
+        # por su cuenta, asi que con FETCH_TIMEOUT un solo fetch colgado podia
+        # costar 45s -- mas que el presupuesto entero de la consulta.
+        return ang, prov, obtener(url, prov.nombre, salud,
+                                  timeout=config.DECISOR_FETCH_TIMEOUT)
+
+    limite_hilos = min(config.MAX_CONCURRENCY, max(1, len(trabajos)))
+    # El executor NO va en un `with`: al salir, el context manager espera a los
+    # hilos vivos (shutdown(wait=True)) y eso hacia inutil el presupuesto --
+    # medido, una corrida con todos los buscadores colgados tardaba 48s con el
+    # presupuesto en 25. Se cierra con wait=False para volver a tiempo.
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=limite_hilos)
+    futuros = [ex.submit(tarea, a, p) for a, p in trabajos]
+    try:
+        restante = max(0.1, config.DECISOR_BUDGET_S - (time.monotonic() - t0))
+        for fut in concurrent.futures.as_completed(futuros, timeout=restante):
+            if time.monotonic() - t0 > config.DECISOR_BUDGET_S:
+                break
+            try:
+                ang, prov, r = fut.result()
+            except Exception as e:
+                log.warning("tarea fallo: %s", str(e)[:100])
+                continue
+            fetches += 1
+            if not r.sirve:
+                continue
+            items, _ = extraction.extraer(r.page, r.html, prov.nombre)
+            por_proveedor[prov.nombre] = por_proveedor.get(prov.nombre, 0) + len(items)
+            for it in items:
+                crudos.append((it, ang.nombre, prov.nombre))
+    except concurrent.futures.TimeoutError:
+        # No es un error: es el presupuesto haciendo su trabajo. Lo ya extraido
+        # se usa igual.
+        log.warning("presupuesto agotado resolviendo '%s'", empresa)
+    finally:
+        for f in futuros:
+            f.cancel()
+        ex.shutdown(wait=False, cancel_futures=True)
+
+    for it, ang, prov in crudos:
+        url = it.get("url", "")
+        if personas.es_perfil_linkedin(url):
+            continue
+        texto = it.get("titulo", "") + " " + it.get("snippet", "")
+        propio = website.pertenece_a(url, empresa) >= 0.8 or (
+            bool(dominio) and dominio in url.lower())
+        liga = _liga_con_la_empresa(texto, empresa)
+        for p in personas.extraer_personas(it.get("titulo", ""), it.get("snippet", ""), url):
+            agregar(Candidato(
+                nombre=p["person_name"], cargo=p["person_title"], url=url,
+                angulo=ang, proveedor=prov,
+                origen="sitio_propio" if propio else "tercero",
+                donde=p["evidence"], empresa_en_texto=liga))
+
+    # ── Fase 3: paginas de equipo que aparecieron en la busqueda ─────────────
+    for url in _paginas_a_visitar(crudos, empresa, dominio):
+        if time.monotonic() - t0 > config.DECISOR_BUDGET_S:
+            break
+        if len(visitadas) >= config.DECISOR_MAX_PAGINAS:
+            break
+        leer_pagina(url)
+
+    candidatos = fusionar_mismo_humano(candidatos)
+    ordenados = sorted(candidatos.values(), key=lambda c: -c.score)[:limite]
+    diag = _diagnostico(plan, por_proveedor, salud, len(crudos), fetches,
+                        len(visitadas), len(candidatos), t0, busco=True,
+                        descartados_por_techo=descartados_por_techo)
+    completo = diag["completo"]
+
+    if not ordenados:
+        # El motivo del vacio no es opcional: "esta empresa no publica a nadie"
+        # y "los buscadores no nos dejaron mirar" se arreglan en lugares
+        # distintos, y confundirlos ya costo una investigacion entera (F1/F4).
+        diag["motivo_vacio"] = ("providers_blocked" if diag["proveedores_bloqueados"]
+                                else "sin_resultados" if not crudos and not visitadas
+                                else "no_publicado")
+
+    log.info("decisor '%s' -> %d candidatos (%d crudos, %d fetches, %d paginas) en %dms%s",
+             empresa, len(ordenados), len(crudos), fetches, len(visitadas), diag["ms"],
+             " BLOQUEADO:" + ",".join(diag["proveedores_bloqueados"])
+             if diag["proveedores_bloqueados"] else "")
+    return {"candidatos": ordenados, "completo": completo, "diagnostico": diag}
+
+
+def _diagnostico(plan, por_proveedor, salud, crudos, fetches, paginas, cands,
+                 t0, busco: bool, descartados_por_techo: int = 0) -> dict:
+    """El diagnostico en un solo lugar: los dos caminos de salida lo arman igual.
+
+    Cuando se resolvio SIN buscar, `completo` es True aunque `proveedores_ok`
+    este vacio -- no hubo nada bloqueado porque no se pidio nada.
+    """
+    bloqueados = salud.resumen()
+    return {
+        "angulos": [a.nombre for a in plan],
+        "queries": [a.query for a in plan],
+        "proveedores_ok": por_proveedor,
+        "proveedores_bloqueados": bloqueados,
+        "crudos": crudos,
+        "fetches": fetches,
+        "fetches_descartados_por_techo": descartados_por_techo,
+        "paginas_visitadas": paginas,
+        "candidatos": cands,
+        "busco_en_internet": busco,
+        "ms": int((time.monotonic() - t0) * 1000),
+        "completo": (bool(por_proveedor) and not bloqueados) if busco else True,
+    }

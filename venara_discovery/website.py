@@ -30,6 +30,33 @@ def limpiar_html(html: str, max_chars: int = 12000) -> str:
     return re.sub(r"\s+", " ", t).strip()[:max_chars]
 
 
+# Etiquetas que separan una cosa de la siguiente en una pagina. Sin este corte,
+# "<h3>Matias Bravo</h3><p>Gerente General</p>" queda como "Matias Bravo Gerente
+# General" y no hay forma de saber donde termina el nombre y empieza el cargo.
+_BLOQUE = re.compile(
+    r"</?(?:p|div|li|tr|td|th|br|h[1-6]|section|article|header|footer|"
+    r"figcaption|blockquote|dt|dd|option)\b[^>]*>", re.I)
+
+
+def texto_por_bloques(html: str, max_chars: int = 20000) -> str:
+    """HTML -> texto con UN SALTO DE LINEA por bloque.
+
+    `limpiar_html()` colapsa todo a una linea, que es lo correcto para medir
+    relevancia pero destruye justo lo que necesita la extraccion de personas:
+    en una pagina de equipo el nombre y el cargo son dos bloques distintos, y
+    pegados no se distinguen de una frase cualquiera.
+    """
+    t = _TAGS.sub(" ", html or "")
+    t = _BLOQUE.sub("\n", t)
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = (t.replace("&nbsp;", " ").replace("&amp;", "&")
+          .replace("&quot;", '"').replace("&#39;", "'")
+          .replace("&lt;", "<").replace("&gt;", ">"))
+    # Se colapsan espacios DENTRO de cada linea, no entre lineas.
+    lineas = [re.sub(r"[ \t]+", " ", l).strip() for l in t.split("\n")]
+    return "\n".join(l for l in lineas if l)[:max_chars]
+
+
 def pertenece_a(url: str, nombre_empresa: str) -> float:
     """0..1 — cuanta evidencia hay de que este dominio sea de ESTA empresa.
 

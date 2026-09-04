@@ -83,6 +83,12 @@ def test_MEDICION_los_perfiles_de_persona_no_estan_en_el_indice():
 
     perfiles = 0
     for f in fix.glob("*.html"):
+        # Los fixtures `sintetico_*` estan escritos a mano para probar parseo,
+        # no capturados de un buscador. Contarlos aca convertiria una decision
+        # de diseno de un test en "evidencia" sobre el indice publico, que es
+        # exactamente lo que esta medicion no debe hacer.
+        if f.name.startswith("sintetico_"):
+            continue
         html = f.read_text(encoding="utf-8")
         if blocking.analizar(html, 200).bloqueado:
             continue          # una pagina bloqueada no dice nada

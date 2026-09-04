@@ -299,3 +299,125 @@ pagina pasaba por buena.
 Corregido agregando el `<title>` como senal fuerte: ninguna pagina de
 resultados legitima se titula "Captcha". Con control positivo sobre los cuatro
 motores que si funcionan, cuyo titulo lleva la query.
+
+## F21 — Los nombres estan en la PAGINA, no en el snippet del buscador
+
+Medido el 2026-09-03 (IP residencial, sin proxy, Bing respondiendo 200 en 18/18
+fetches): una busqueda del canal personas devolvio **67 resultados crudos** y el
+parser de snippets saco **UN candidato, que ademas era falso** ("Secretario
+General" es un cargo, no una persona).
+
+La conclusion no es que el canal no sirva. Es que el snippet de un buscador casi
+nunca tiene la forma "Nombre - Cargo - Empresa": tiene la descripcion comercial
+del sitio. Los nombres estan **dentro** de la pagina de equipo, y para leerlos
+hay que visitarla.
+
+Consecuencia de diseno: `/search-people` devuelve **dos** salidas.
+
+  results   personas parseadas del snippet. Gratis cuando aparecen, minoria.
+  pages     paginas que merecen un scrape porque tienen forma de listar gente.
+
+Devolver solo `results` tiraba el 99% del valor de cada busqueda, y hacia que el
+canal reportara "no hay decisores" sobre corridas que habian encontrado doce
+paginas de equipo.
+
+### F21.1 — La heuristica de "pagina de personas" necesito dos correcciones, las dos medidas
+
+La primera version marco como paginas de equipo a `amarillas.cl`, `laborum.cl`,
+`chilepymes.com` y `directorioempresaschile.cl`. Dos causas distintas:
+
+1. **"directorio" y "socios" en el TITULO.** En un titulo casi siempre
+   significan "Directorio de empresas de Chile" -- un agregador. Se quitaron de
+   las senales de titulo y se aplico `filtering.motivo_descarte()`, el mismo
+   filtro que ya protege al pipeline de empresas.
+2. **Senales buscadas en la URL COMPLETA, host incluido.** `directorioempresaschile.cl`
+   entraba porque su NOMBRE contiene "directorio". Las senales pasaron a
+   buscarse solo en la RUTA: `/directorio` es el directorio de una sociedad, un
+   host llamado "directorio…" es un agregador.
+
+### F21.2 — Sin proxy no se puede medir la viabilidad del canal
+
+En las corridas del 2026-09-03 desde IP residencial sin `PROXY_URL`, DuckDuckGo,
+Brave y lite-DDG pasaron a captcha tras pocas busquedas y quedo respondiendo
+solo Bing, que este mismo documento ya clasifica como fuente hostil (F6). Con
+solo Bing, ninguno de los 30 resultados por query era una pagina de equipo.
+
+**Eso NO mide el canal: mide la ausencia de proxy.** La viabilidad hay que
+medirla con `PROXY_URL` configurado, que es la condicion de produccion.
+
+## F22 — El sitio del prospecto es la fuente que SIEMPRE atiende
+
+Medido el 2026-09-03 resolviendo el decisor de cuatro empresas chilenas reales
+(Fintual, Buk, Betterfly, Toteat) desde IP residencial sin proxy.
+
+### F22.1 — Buscar no alcanza, y a veces no sirve para nada
+
+`site:fintual.cl (equipo OR nosotros OR "quienes somos")` en Bing devolvio diez
+resultados: **zhihu.com y foros franceses sobre Instagram**. Bing ignora el
+operador `site:` y sirve cualquier cosa -- es el mismo F6 de siempre. Los otros
+tres proveedores estaban en captcha (F1).
+
+Con eso, un resolutor que solo sabe buscar no encuentra nada por mas angulos que
+tenga. La correccion no fue agregar un angulo mas: fue **entrar al sitio**. La
+pagina de equipo esta enlazada desde la home, y ese camino no depende de que
+ningun buscador nos atienda -- depende del prospecto, que es justamente quien SI
+quiere ser leido.
+
+Orden resultante: primero el sitio; las busquedas solo si el sitio no alcanzo.
+Cuando el sitio da un decisor con evidencia fuerte, la consulta **no gasta una
+sola busqueda**.
+
+### F22.2 — Los numeros
+
+    empresa      veredicto   decisores  fetches  paginas    ms
+    Fintual      decisor     1          3        2          2.859
+    Buk          decisor     3          12       3          5.498
+    Betterfly    bloqueado   0          12       3          5.458
+    Toteat       bloqueado   0          10       1          3.713
+
+Fintual se resolvio **sin buscar**: 3 fetches al propio sitio, 2,8 segundos.
+Comparar con el `buscar_persona()` anterior, que tardaba **4m43s** para devolver
+NOT_FOUND.
+
+### F22.3 — Tres falsos positivos que solo aparecen con datos reales
+
+La primera corrida devolvio como personas:
+
+  "Chief Economist"   un cargo en ingles, en el /equipo de Fintual
+  "Betterfly's Co"    recorte de "Betterfly's Co-Founder"
+  "Jaime Arrieta" + "Jaime Arrieta Boetsch"   la MISMA persona, dos veces
+
+Ninguno se le habria ocurrido a quien escribe los tests desde cero: salieron de
+mirar HTML real. Los tres estan corregidos y fijados con tests que citan el caso
+medido, y con control positivo sobre los decisores reales que la misma corrida
+encontro (Omar Larre, Ricardo Sateler, Jaime Arrieta Boetsch, Cristobal Della
+Maggiora).
+
+### F22.4 — El presupuesto no acotaba nada
+
+La corrida medida tardo **48s con DECISOR_BUDGET_S en 25**. Dos causas
+independientes, las dos invisibles en test unitario:
+
+1. `as_completed()` sin `timeout` esperaba a los futuros para siempre.
+2. Salir del `with` del ThreadPoolExecutor hace `shutdown(wait=True)`, que
+   espera a los hilos vivos.
+
+Ademas Scrapling reintenta 3 veces por su cuenta: con `FETCH_TIMEOUT` de 15s, un
+solo fetch colgado costaba 45s -- mas que el presupuesto entero. De ahi
+`DECISOR_FETCH_TIMEOUT`.
+
+### F22.5 — El sistema reporta lo que la fuente dice, incluso cuando la fuente se equivoca
+
+En una corrida aparecio **"Eduardo Dillamajora"** como fundador de Betterfly. El
+apellido real es Della Maggiora. Se verifico que NO es el parser: el codigo
+captura tramos de texto y no transforma letras (`sin_acentos` solo quita
+diacriticos), asi que la cadena estaba literal en el snippet -- probablemente un
+transcript de podcast escrito de oido.
+
+No se agrega correccion difusa de nombres: adivinar la ortografia correcta
+introduce una clase de error peor (cambiar un apellido que SI estaba bien).
+Lo que si mitiga el problema es el ranking, que ya prefiere el sitio propio de
+la empresa (1.0) sobre un tercero (0.65).
+
+Consecuencia operativa: un candidato de score 0.65 venido de un tercero vale
+para investigar, no para saludar por nombre sin mirar.
