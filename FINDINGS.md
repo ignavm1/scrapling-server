@@ -533,3 +533,46 @@ Para usar Google literalmente haria falta su **API oficial de Custom Search**
 (una API key y un Search Engine ID). No hay ninguno configurado en el proyecto;
 el `GOOGLE_AI_API_KEY` que existe es de Gemini y no sirve para esto sin crear
 antes el buscador programable.
+
+## F25 — Encontrar al decisor no es alcanzarlo: los sitios ya no publican email
+
+Medido el 2026-09-04. El resolutor encontro a Omar Larre (Fintual) y a Sebastian
+Kreis (Xepelin) con score alto, y los dos quedaron **sin ningun canal de
+contacto**. Para el usuario eso vale lo mismo que no haberlos encontrado.
+
+Se verifico sobre el HTML servido, no se asumio:
+
+    fintual.cl    20.000 chars de texto   0 mailto   0 emails   0 paginas de contacto enlazadas
+    xepelin.com    6.954 chars de texto   0 mailto   0 emails   0 paginas de contacto enlazadas
+
+No es un fallo del parser: **esas empresas no publican correo**. Usan formulario
+o chat. La pagina de contacto ni siquiera esta enlazada con la palabra
+"contacto" desde la home.
+
+### F25.1 — La regla que NO se rompe
+
+De `lib/enrichment/pattern.ts` de Venara: *"nunca construir un email de envio
+sobre un patron que tambien se adivino; cada fallo es un rebote que degrada el
+buzon del cliente"*. Con cero muestras del dominio, adivinar `nombre.apellido@`
+es exactamente eso. No se hace.
+
+Por eso cada email sale con su procedencia:
+
+    publicado  el sitio trae el de ESA persona                    confianza 95
+    patron     deducido de una muestra REAL del dominio, citada   45-80
+    generico   buzon de la empresa, NO de la persona              30
+
+### F25.2 — Dos caminos mas, porque el sitio propio no alcanza
+
+1. **Rutas habituales.** Si la home no enlaza contacto, se prueban `/contacto` y
+   `/contact`. Un fetch, y es lo unico que queda cuando el enlace no existe.
+2. **La muestra se busca afuera.** Si el sitio no publica ninguna direccion, se
+   pregunta `"@<dominio>"` a los buscadores: una nota de prensa o un directorio
+   suelen publicar una. Con UNA muestra la convencion queda deducida y toda
+   persona futura de esa empresa sale gratis.
+
+Los dos caminos estan verificados con oraculos deterministas. **En vivo no se
+pudieron validar**: en la corrida del 2026-09-04 los cuatro proveedores estaban
+en captcha o timeout desde esta IP tras horas de medicion. Es el mismo cuello de
+botella de F23 -- sin `PROXY_URL` el sistema se queda sin buscadores, y aca eso
+significa quedarse sin la muestra.

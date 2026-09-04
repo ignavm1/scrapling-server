@@ -42,7 +42,8 @@ import time
 from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass, field
 
-from . import config, extraction, filtering, linkedin_perfil, personas, providers, website
+from . import (config, contacto as mod_contacto, extraction, filtering,
+               linkedin_perfil, personas, providers, website)
 from .fetch import SaludProveedores, obtener
 from .linkedin import puntuar_cargo
 from .location import Ubicacion, interpretar
@@ -90,6 +91,8 @@ class Candidato:
     empresa_en_texto: bool
     score: float = 0.0
     evidencia: list[str] = field(default_factory=list)
+    # Por que canal se alcanza. Se llena al final, cuando ya se sabe quien es.
+    contacto: dict = field(default_factory=dict)
 
     def a_dict(self) -> dict:
         return {
@@ -102,6 +105,9 @@ class Candidato:
             "found_in": self.donde,
             "confidence": round(self.score, 3),
             "evidence": self.evidencia,
+            # Cada dato de contacto viaja con su procedencia: un email sin
+            # origen no se puede auditar el dia que rebota.
+            "contact": self.contacto or None,
         }
 
 
@@ -312,6 +318,38 @@ def _paginas_del_sitio(dominio: str, salud: SaludProveedores) -> tuple[list[str]
     return urls, 1
 
 
+def _paginas_de_contacto(dominio: str, salud: SaludProveedores) -> list[str]:
+    """Paginas de contacto enlazadas desde la home. Ahi viven los emails."""
+    if not dominio:
+        return []
+    base = "https://" + dominio
+    r = obtener(base + "/", "sitio", salud, timeout=config.DECISOR_FETCH_TIMEOUT)
+    if not r.html:
+        return []
+    out, vistas = [], set()
+    for m in _RX_ENLACE.finditer(r.html):
+        href = (m.group(1) or "").strip()
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        url = urljoin(base + "/", href).split("#")[0]
+        host = urlsplit(url).hostname or ""
+        if not (host == dominio or host.endswith("." + dominio)):
+            continue
+        if url in vistas or not mod_contacto.es_pagina_de_contacto(url, _texto_ancla(m.group(2))):
+            continue
+        vistas.add(url)
+        out.append(url)
+        if len(out) >= 2:
+            break
+    # MEDIDO (2026-09-04): fintual.cl y xepelin.com no enlazan ninguna pagina
+    # con la palabra "contacto" en la home -- usan formulario o chat. Probar las
+    # rutas habituales cuesta un fetch y es lo unico que queda cuando el enlace
+    # no existe.
+    if not out:
+        out = [base + "/" + r for r in ("contacto", "contact")]
+    return out
+
+
 def _paginas_a_visitar(items: list[tuple[dict, str, str]], empresa: str,
                        dominio: str) -> list[str]:
     """URLs del SITIO DE LA EMPRESA que parecen listar gente.
@@ -456,6 +494,9 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
 
     candidatos: dict[str, Candidato] = {}
     visitadas: set[str] = set()
+    # Texto de las paginas del PROPIO sitio. Es de donde sale el contacto: los
+    # emails no estan en el buscador, estan en la pagina de contacto.
+    texto_sitio: list[str] = []
     fetches = 0
     crudos: list[tuple[dict, str, str]] = []
     por_proveedor: dict[str, int] = {}
@@ -487,6 +528,7 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         # cargo son dos elementos distintos, y pegados no se distinguen de una
         # frase cualquiera.
         texto = website.texto_por_bloques(r.html)
+        texto_sitio.append(texto)
         liga = _liga_con_la_empresa(texto, empresa)
         for p in personas.extraer_de_texto(texto, url):
             agregar(Candidato(
@@ -507,7 +549,19 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
     if mejor_ahora >= UMBRAL_SUFICIENTE:
         # Ya hay un decisor con evidencia fuerte. Gastar ocho busquedas encima
         # no lo mejora y si quema el presupuesto de scraping del lote.
+        if dominio:
+            ya = mod_contacto.emails_del_dominio("\n".join(texto_sitio), dominio)
+            if not ya:
+                for url in _paginas_de_contacto(dominio, salud):
+                    leer_pagina(url, angulo="contacto")
+                    break
         ordenados = sorted(candidatos.values(), key=lambda c: -c.score)[:limite]
+        texto = "\n".join(texto_sitio)
+        emails = mod_contacto.emails_del_dominio(texto, dominio)
+        pares = mod_contacto.emparejar(emails, [c.nombre for c in candidatos.values()])
+        for c in ordenados:
+            c.contacto = mod_contacto.contacto_de(
+                c.nombre, dominio, texto, ubi.pais or "CL", pares)
         diag = _diagnostico(plan, {}, salud, 0, fetches, len(visitadas),
                             len(candidatos), t0, busco=False)
         log.info("decisor '%s' -> %d desde el sitio, sin buscar, en %dms",
@@ -648,8 +702,55 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         # -- que es exactamente lo que paso al repetir la medicion.
         leer_pagina(url, angulo="pagina_desde_busqueda")
 
+    # ── Fase 4: la pagina de contacto ────────────────────────────────────────
+    # Se visita solo si hace falta: si el texto ya recogido trae un email del
+    # dominio, gastar otro fetch no agrega nada.
+    if dominio and time.monotonic() - t0 < config.DECISOR_BUDGET_S:
+        ya = mod_contacto.emails_del_dominio("\n".join(texto_sitio), dominio)
+        if not ya:
+            for url in _paginas_de_contacto(dominio, salud):
+                leer_pagina(url, angulo="contacto")
+                break
+
     candidatos = fusionar_mismo_humano(candidatos)
     ordenados = sorted(candidatos.values(), key=lambda c: -c.score)[:limite]
+
+    # ── Fase 5: buscar un email del dominio en la web abierta ───────────────
+    # Cuando el sitio no publica ninguno -- que es lo normal en startups, con
+    # formulario en vez de correo -- la unica muestra posible esta afuera: una
+    # nota de prensa, un directorio, un PDF. Con UNA muestra se deduce la
+    # convencion y toda persona de esa empresa sale gratis; sin ninguna, la
+    # regla del repo prohibe construir nada.
+    #
+    # Se dispara solo si hace falta: si ya hay un email, otra busqueda no
+    # agrega nada.
+    if (dominio and ordenados
+            and not mod_contacto.emails_del_dominio("\n".join(texto_sitio), dominio)
+            and time.monotonic() - t0 < config.DECISOR_BUDGET_S):
+        for prov in activos[: config.DECISOR_PROVEEDORES_POR_ANGULO]:
+            if time.monotonic() - t0 > config.DECISOR_BUDGET_S:
+                break
+            url = providers.construir_url(prov.nombre, f'"@{dominio}"', ubi)
+            r = obtener(url, prov.nombre, salud, timeout=config.DECISOR_FETCH_TIMEOUT)
+            fetches += 1
+            if not r.sirve:
+                continue
+            items, _ = extraction.extraer(r.page, r.html, prov.nombre)
+            hallado = "\n".join((it.get("titulo", "") + " " + it.get("snippet", ""))
+                                 for it in items)
+            if mod_contacto.emails_del_dominio(hallado, dominio):
+                texto_sitio.append(hallado)
+                break
+
+    # ── El contacto de cada decisor ─────────────────────────────────────────
+    texto = "\n".join(texto_sitio)
+    nombres_vistos = [c.nombre for c in candidatos.values()]
+    emails = mod_contacto.emails_del_dominio(texto, dominio)
+    pares = mod_contacto.emparejar(emails, nombres_vistos)
+    for c in ordenados:
+        c.contacto = mod_contacto.contacto_de(
+            c.nombre, dominio, texto, ubi.pais or "CL", pares)
+
     diag = _diagnostico(plan, por_proveedor, salud, len(crudos), fetches,
                         len(visitadas), len(candidatos), t0, busco=True,
                         descartados_por_techo=descartados_por_techo)

@@ -656,3 +656,106 @@ def test_control_positivo_la_home_si_etiqueta_sitio_directo(monkeypatch):
     _sin_red(monkeypatch)
     r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
     assert any(c.angulo == "sitio_directo" for c in r["candidatos"])
+
+
+# ── D8: el contacto viaja con el decisor ────────────────────────────────────
+
+def test_el_resolutor_entrega_el_contacto_junto_al_decisor(monkeypatch):
+    # Confirmar quien decide no sirve de nada si no hay por donde escribirle.
+    _sin_red(monkeypatch)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Santiago, Chile")
+    mejor = r["candidatos"][0]
+    assert mejor.contacto, "el decisor llego sin contacto"
+    # El fixture publica contacto@onzamarketing.cl en el pie: es de la empresa,
+    # y tiene que decirlo en vez de hacerlo pasar por el correo de la persona.
+    assert mejor.contacto["email"] == "contacto@onzamarketing.cl"
+    assert mejor.contacto["email_source"] == "generico"
+    assert mejor.contacto["evidence"]
+
+
+def test_el_endpoint_expone_el_contacto_con_su_procedencia(monkeypatch):
+    _sin_red(monkeypatch)
+    d = cliente.post("/find-decision-maker", json={
+        "company": EMPRESA, "domain": DOMINIO, "location": "Santiago, Chile"}).json()
+    contacto = d["person"]["contact"]
+    assert contacto is not None
+    for campo in ("email", "email_source", "email_confidence", "phone",
+                  "whatsapp", "phone_kind", "evidence"):
+        assert campo in contacto, campo
+
+
+def test_sin_dominio_el_contacto_no_inventa_un_email(monkeypatch):
+    # Sin dominio no hay de donde sacar ni deducir un buzon. Devolver algo
+    # igual seria exactamente la loteria que la regla del repo prohibe.
+    _sin_red(monkeypatch, pagina="<html><body><p>Servicios</p></body></html>")
+    r = decisor.resolver(EMPRESA, "", "Chile")
+    for c in r["candidatos"]:
+        assert c.contacto.get("email") is None, (c.nombre, c.contacto)
+
+
+def test_busca_un_email_del_dominio_cuando_el_sitio_no_publica_ninguno(monkeypatch):
+    """MEDIDO (2026-09-04): fintual.cl y xepelin.com no publican NI UN email.
+
+    Ni un mailto, ni una direccion, en la home ni en ninguna pagina de
+    contacto: usan formulario. El decisor aparecia sin canal, que para el
+    usuario es lo mismo que no haberlo encontrado.
+
+    Cuando el sitio no da muestra, la muestra se busca afuera: una nota de
+    prensa o un directorio publican una direccion del dominio, y con UNA la
+    convencion queda deducida.
+    """
+    equipo = ("<html><head><title>Equipo</title></head><body>"
+              "<h3>Matias Bravo</h3><p>Gerente General</p></body></html>")
+    serp_email = ('<html><body><div class="results"><div class="result">'
+                  '<a class="result__a" href="https://prensa.cl/nota">Onza en la prensa</a>'
+                  '<a class="result__snippet" href="https://prensa.cl/nota">'
+                  'Contacto: paula.torres@onzamarketing.cl</a></div></div></body></html>')
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if proveedor == "sitio":
+            return _Rta(html=equipo)          # el sitio no trae ni un email
+        return _Rta(html=serp_email)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Santiago, Chile")
+    mejor = r["candidatos"][0]
+    assert mejor.nombre == "Matias Bravo"
+    assert mejor.contacto["email"] == "matias.bravo@onzamarketing.cl"
+    assert mejor.contacto["email_source"] == "patron"
+    assert any("paula.torres@onzamarketing.cl" in e for e in mejor.contacto["evidence"])
+
+
+def test_no_gasta_la_busqueda_de_email_si_el_sitio_ya_publica_uno(monkeypatch):
+    # Control del ahorro: con un email a la vista, otra busqueda no agrega nada.
+    consultas = []
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if proveedor == "sitio":
+            return _Rta(html=PAGINA)          # el pie trae contacto@onzamarketing.cl
+        consultas.append(url)
+        return _Rta(html=SERP)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    decisor.resolver(EMPRESA, DOMINIO, "Santiago, Chile")
+    assert not any("%40onzamarketing" in u or "@onzamarketing" in u for u in consultas), \
+        consultas
+
+
+def test_prueba_las_rutas_de_contacto_habituales_si_la_home_no_las_enlaza(monkeypatch):
+    # MEDIDO: ni fintual.cl ni xepelin.com enlazan una pagina con la palabra
+    # "contacto". Probar /contacto y /contact cuesta un fetch y es lo unico que
+    # queda cuando el enlace no existe.
+    pedidas = []
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        pedidas.append(url)
+        if url.endswith("/contacto"):
+            return _Rta(html="<html><body><p>hola@onzamarketing.cl</p></body></html>")
+        if proveedor == "sitio":
+            return _Rta(html="<html><body><a href='/servicios'>Servicios</a>"
+                             "<h3>Matias Bravo</h3><p>Gerente General</p></body></html>")
+        return _Rta(html=SERP)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert any(u.endswith("/contacto") for u in pedidas), pedidas

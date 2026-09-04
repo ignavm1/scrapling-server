@@ -6,10 +6,10 @@ en cada corrida.
 
 | Empresa | Dominio | Veredicto | Decisores | Fetches | Paginas | Crudos | Bloqueados | ms |
 |---|---|---|---|---|---|---|---|---|
-| Fintual | fintual.cl | decisor | 1 | 3 | 2 | 0 | — | 2770 |
-| Buk | buk.cl | bloqueado | 0 | 12 | 3 | 0 | brave, duckduckgo | 8150 |
-| Betterfly | betterfly.com | bloqueado | 0 | 12 | 3 | 0 | brave, duckduckgo | 8724 |
-| Toteat | toteat.com | bloqueado | 0 | 10 | 1 | 0 | brave, duckduckgo | 6277 |
+| Fintual | fintual.cl | decisor | 1 | 4 | 3 | 0 | — | 5169 |
+| Buk | buk.cl | bloqueado | 0 | 10 | 3 | 0 | brave | 25006 |
+| Betterfly | betterfly.com | bloqueado | 0 | 9 | 3 | 0 | brave | 25005 |
+| Toteat | toteat.com | bloqueado | 0 | 9 | 1 | 0 | brave | 25005 |
 
 **Empresas con decisor encontrado: 1 de 4 (1 personas).**
 
@@ -27,6 +27,6 @@ Un vacio por bloqueo **no** significa que la empresa no publique a su
 decisor. Sin `PROXY_URL` los buscadores bloquean a los pocos requests
 (F1) y queda solo Bing, ya clasificado como fuente hostil (F6).
 
-- Buk: brave=captcha, duckduckgo=status-403
-- Betterfly: brave=captcha, duckduckgo=status-403
-- Toteat: brave=captcha, duckduckgo=status-403
+- Buk: brave=captcha
+- Betterfly: brave=captcha
+- Toteat: brave=captcha

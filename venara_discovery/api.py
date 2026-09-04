@@ -388,6 +388,17 @@ def find_decision_maker(req: DecisionMakerRequest):
 
     Devuelve `found: false` con un `reason` cuando no encuentra: "no_publicado"
     y "providers_blocked" mandan a hacer cosas distintas.
+
+    EL CONTACTO viaja en `person.contact`, y cada dato dice de donde salio:
+
+        email_source "publicado"  el sitio trae el email de ESA persona (95)
+                     "patron"     deducido de una muestra real del dominio,
+                                  citada en `evidence` (45-80)
+                     "generico"   buzon de la empresa, NO de la persona (30)
+
+    Nunca se construye un email sin una muestra del dominio: un patron
+    adivinado mas un nombre es loteria, y cada rebote degrada el buzon del
+    cliente. `whatsapp` solo se llena si el numero es movil.
     """
     empresa = req.company.strip()
     if not empresa or empresa in {"NO_COMPANY_FOUND", "NOT_FOUND"}:
