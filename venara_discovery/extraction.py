@@ -32,6 +32,7 @@ SELECTORES = {
 }
 
 _RX_ANCLA = re.compile(r'<a\b[^>]*\bhref=["\'](.*?)["\'][^>]*>(.*?)</a>', re.I | re.S)
+_RX_ANCLA_ABRE = re.compile(r'<a\b[^>]*\bhref=["\'](.*?)["\']', re.I | re.S)
 _RX_TAGS = re.compile(r"<[^>]+>")
 
 
@@ -50,6 +51,25 @@ _RX_BREADCRUMB = re.compile(r"https?://\S+|\s›\s|\s>\s", re.I)
 def _limpiar_breadcrumb(texto: str) -> str:
     t = _RX_BREADCRUMB.sub(" ", texto or "")
     return re.sub(r"\s+", " ", t).strip()
+
+
+def _cortar_en_otro_resultado(fragmento: str, url_actual: str) -> str:
+    """Recorta la ventana donde empieza OTRO resultado.
+
+    Los buscadores repiten anclas hacia la MISMA URL dentro de un resultado (el
+    titulo, el breadcrumb y el propio snippet en DuckDuckGo), asi que no sirve
+    cortar en cualquier ancla: hay que cortar en la primera que apunta a otro
+    lado.
+    """
+    # Se buscan ETIQUETAS DE APERTURA, no anclas completas: el ancla que abre
+    # el resultado siguiente casi siempre tiene su </a> mas alla de la ventana,
+    # asi que exigir el cierre hacia que el corte no disparara nunca -- que es
+    # justo el caso que este helper existe para cubrir.
+    for m in _RX_ANCLA_ABRE.finditer(fragmento or ""):
+        destino = normalizar_url(decodificar_redirect(m.group(1)))
+        if destino and destino != url_actual:
+            return fragmento[: m.start()]
+    return fragmento or ""
 
 
 def extraer_por_regex(html: str) -> list[dict]:
@@ -76,7 +96,16 @@ def extraer_por_regex(html: str) -> list[dict]:
         titulo = limpiar_titulo(_limpiar_breadcrumb(_texto(interior)))
         # Ventana de texto posterior al ancla: ahi vive la descripcion del
         # resultado en los tres motores, sin depender de ninguna clase.
-        cola = _texto(crudo[m.end(): m.end() + 1200])
+        #
+        # La ventana se CORTA en el primer ancla que apunta a otra URL. Sin ese
+        # corte, los 1200 caracteres cruzan al resultado vecino y su texto se
+        # atribuye a este: medido sobre el fixture de personas, el snippet de
+        # una nota de df.cl terminaba nombrando al gerente de otra empresa
+        # (misma familia de fallo que F11, que ya se habia visto en la capa
+        # CSS). Un snippet corto pierde contexto; uno contaminado inventa un
+        # hecho, y ese es el error caro.
+        cola_cruda = _cortar_en_otro_resultado(crudo[m.end(): m.end() + 1200], norm)
+        cola = _texto(cola_cruda)
         snippet = _limpiar_breadcrumb(cola)[:400]
         vistos.add(norm)
         salida.append({"url": norm, "titulo": titulo, "snippet": snippet})
