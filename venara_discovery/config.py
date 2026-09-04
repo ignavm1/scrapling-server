@@ -2,7 +2,11 @@
 from __future__ import annotations
 import os
 
-VERSION = "6.0.0"
+# 6.1.0 -- resolutor de decisor (empresa -> persona) y canal personas.
+# El bump no es cosmetico: /health es la unica forma de saber QUE codigo esta
+# corriendo en Render, y sin cambiar este numero un deploy que no bajo se ve
+# igual que uno que si. Ya paso en la 5.0.0, por eso existe la convencion.
+VERSION = "6.1.0"
 
 # ── Red ──────────────────────────────────────────────────────────────────────
 PROXY_URL = os.environ.get("PROXY_URL") or None
