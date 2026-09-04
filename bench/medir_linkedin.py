@@ -45,9 +45,11 @@ def main() -> int:
         li = [c for c in cands if c.angulo == "linkedin_perfil"]
         filas.append({
             "empresa": nombre, "dominio": dom, "cands": cands, "li": len(li),
-            "veredicto": ("decisor" if cands
-                          else "bloqueado" if d["proveedores_bloqueados"]
-                          else "no_publicado"),
+# El veredicto lo pone el RESOLUTOR, no este script. Reproducirlo aca
+# significaba repetir su logica -- y cuando el resolutor aprendio a
+# distinguir "no publica" de "no pudimos mirar" (F26.4), el reporte
+# siguio diciendo "no publicado" sobre corridas sin acceso.
+            "veredicto": "decisor" if cands else d.get("motivo_vacio", "sin_datos"),
             "bloq": d["proveedores_bloqueados"], "ms": d["ms"],
             "fetches": d["fetches"], "pag": d["paginas_visitadas"],
         })

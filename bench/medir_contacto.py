@@ -41,6 +41,10 @@ def main() -> int:
         cands = r["candidatos"]
         filas.append({"empresa": nombre, "cands": cands,
                       "bloq": r["diagnostico"]["proveedores_bloqueados"],
+                      # El motivo lo pone el resolutor. Reproducirlo aca hacia
+                      # que el reporte dijera "no publicado" sobre corridas que
+                      # en realidad no pudieron mirar (F26.4).
+                      "motivo": r["diagnostico"].get("motivo_vacio", "sin_datos"),
                       "ms": r["diagnostico"]["ms"]})
 
     con_persona = [f for f in filas if f["cands"]]
@@ -66,7 +70,7 @@ def main() -> int:
     for f in filas:
         if not f["cands"]:
             lineas.append(f"| {f['empresa']} | 0 | 0 | — | "
-                          f"{'bloqueado' if f['bloq'] else 'no publicado'} | — | {f['ms']} |")
+                          f"{f.get('motivo', 'sin_datos')} | — | {f['ms']} |")
             continue
         for c in f["cands"]:
             ct = c.contacto or {}
