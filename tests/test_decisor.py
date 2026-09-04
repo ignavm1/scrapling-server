@@ -74,12 +74,29 @@ def test_los_cargos_se_pueden_pedir_y_estan_topeados():
     assert '"Onza Marketing" socio' in {a.query for a in directas}
 
 
-def test_ninguna_query_del_resolutor_usa_linkedin():
-    # F7: `site:linkedin.com/in` devuelve cero perfiles con control positivo.
-    # Un angulo que no puede traer nada es un angulo menos para los que si.
+def test_ninguna_query_del_resolutor_usa_el_operador_site_linkedin():
+    """Lo que esta prohibido es el OPERADOR, no la palabra.
+
+    F7 midio `site:linkedin.com/in` en Bing y DuckDuckGo: cero perfiles. De ahi
+    se concluyo -- de mas -- que los perfiles no estaban en el indice publico.
+    Medido de nuevo el 2026-09-04: Brave devuelve SIETE perfiles para la misma
+    empresa cuando la query dice simplemente "linkedin". El indice no era el
+    problema; el operador y el buscador si (F24).
+
+    Asi que la regla correcta no es "ninguna query nombra a LinkedIn": es
+    "ninguna gasta un fetch en el operador que esta medido en cero".
+    """
     for dom in ("", DOMINIO):
         for a in decisor.construir_plan(EMPRESA, dom, interpretar("Chile")):
-            assert "linkedin" not in a.query.lower(), a.query
+            assert "site:linkedin" not in a.query.lower(), a.query
+
+
+def test_el_plan_incluye_el_angulo_del_perfil_de_linkedin():
+    # Es el pedido explicito: buscar "(empresa) CEO" y entrar al perfil.
+    plan = decisor.construir_plan(EMPRESA, DOMINIO, interpretar("Chile"))
+    queries = [a.query for a in plan if a.nombre == "linkedin_perfil"]
+    assert queries, [a.nombre for a in plan]
+    assert any(q.lower().endswith("ceo linkedin") for q in queries), queries
 
 
 def test_control_positivo_una_query_prohibida_plantada_si_se_detecta():

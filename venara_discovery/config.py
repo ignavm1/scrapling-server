@@ -62,6 +62,24 @@ DECISOR_BUDGET_S = int(os.environ.get("DECISOR_BUDGET_S", "25"))
 # mas que el presupuesto ENTERO de la consulta. Medido: una corrida con los
 # buscadores colgados tardaba 48s con el presupuesto puesto en 25.
 DECISOR_FETCH_TIMEOUT = int(os.environ.get("DECISOR_FETCH_TIMEOUT", "6"))
+# Perfiles de LinkedIn que se abren por consulta. Cada uno es un fetch y el
+# titulo de UNO suele bastar: los resultados vienen ordenados por relevancia,
+# asi que el cuarto rara vez aporta lo que no dieron los tres primeros.
+DECISOR_MAX_PERFILES = int(os.environ.get("DECISOR_MAX_PERFILES", "3"))
+# Proveedores que se usan POR ANGULO en el resolutor.
+#
+# Medido el 2026-09-04: con el techo de fetches plano, `sitio_equipo` y
+# `cargo_directo` x 4 proveedores consumian los 8 fetches y el angulo de
+# LinkedIn -- el que se acababa de agregar -- no se ejecutaba NUNCA. El sintoma
+# era "linkedin=0" en todas las empresas, que se lee como "el angulo no sirve"
+# cuando en realidad no habia corrido.
+#
+# Dos proveedores por angulo cubre el doble de angulos con el mismo gasto.
+# Angulos distintos alcanzan documentos distintos; proveedores distintos, en
+# cambio, se solapan mucho -- su valor es la resiliencia ante un bloqueo, y para
+# eso dos alcanzan.
+DECISOR_PROVEEDORES_POR_ANGULO = int(
+    os.environ.get("DECISOR_PROVEEDORES_POR_ANGULO", "2"))
 MAX_URL_LEN = 2048
 # Techo de bytes por respuesta de scraping. Sin el, un servidor hostil puede
 # mandar un stream infinito y llenar la memoria del contenedor.

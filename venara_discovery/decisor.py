@@ -42,7 +42,7 @@ import time
 from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass, field
 
-from . import config, extraction, filtering, personas, providers, website
+from . import config, extraction, filtering, linkedin_perfil, personas, providers, website
 from .fetch import SaludProveedores, obtener
 from .linkedin import puntuar_cargo
 from .location import Ubicacion, interpretar
@@ -57,6 +57,10 @@ CARGOS_DIRECTOS = ["CEO", "gerente general", "fundador", "director comercial"]
 # Cuantos angulos de cargo directo se arman. Cada uno cuesta un fetch por
 # proveedor, y DECISOR_MAX_FETCHES corta antes de que sean gratis.
 MAX_CARGOS_DIRECTOS = 3
+
+# Queries de perfil por consulta. Dos cargos abren dos angulos distintos; el
+# tercero repite en gran medida los resultados de los dos primeros.
+MAX_QUERIES_LINKEDIN = 2
 
 # Score a partir del cual no se sale a buscar. Un candidato que llega aca ya
 # tiene cargo de decisor Y esta publicado en el sitio de la propia empresa: ocho
@@ -127,11 +131,20 @@ def construir_plan(empresa: str, dominio: str, ubi: Ubicacion,
         plan.append(Angulo("sitio_equipo",
                            f'"{e}" ("nuestro equipo" OR "quienes somos")', 1))
 
-    # 2) La pregunta directa, que es la que pidio el usuario: "<empresa> CEO".
+    # 2) La pregunta directa: "<empresa> CEO". Va DESPUES del angulo de
+    #    LinkedIn porque un perfil declara cargo y empresa de forma explicita,
+    #    mientras que un resultado suelto hay que interpretarlo.
     for i, cargo in enumerate(lista):
-        plan.append(Angulo("cargo_directo", f'"{e}" {cargo}', 2 + i))
+        plan.append(Angulo("cargo_directo", f'"{e}" {cargo}', 4 + i))
 
-    # 3) Prensa de nombramientos: nombra persona, cargo y empresa en una frase.
+    # 3) El perfil de LinkedIn. Se pide "<empresa> <cargo> linkedin" y NO con el
+    #    operador `site:linkedin.com/in`: medido el 2026-09-04, el operador da
+    #    cero en los proveedores disponibles y la palabra suelta devuelve siete
+    #    perfiles en Brave para la misma empresa (F24).
+    for i, q in enumerate(linkedin_perfil.construir_queries(e, lista)[:MAX_QUERIES_LINKEDIN]):
+        plan.append(Angulo("linkedin_perfil", q, 2 + i))
+
+    # 4) Prensa de nombramientos: nombra persona, cargo y empresa en una frase.
     plan.append(Angulo("prensa",
                        f'"{e}" ("asume como" OR "es el nuevo" OR "fue designado")', 6))
 
@@ -217,6 +230,12 @@ def puntuar(c: Candidato) -> Candidato:
         # propio dominio. Nadie pone al gerente de otra empresa en su /equipo.
         s += PESO_SITIO_PROPIO
         ev.append("publicado en el sitio de la propia empresa")
+    elif c.origen == "linkedin_verificado":
+        # Usa la misma ranura que el sitio propio porque es la misma clase de
+        # evidencia: la fuente es la parte interesada declarandolo. Aca lo
+        # declara la persona en su perfil, y ademas dice la empresa.
+        s += PESO_SITIO_PROPIO
+        ev.append("perfil de LinkedIn que declara ese cargo en esa empresa")
     if c.empresa_en_texto:
         s += PESO_EMPRESA_EN_TEXTO
         ev.append("el texto nombra a la empresa buscada")
@@ -496,7 +515,12 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         return {"candidatos": ordenados, "completo": True, "diagnostico": diag}
 
     # ── Fase 2: los buscadores ───────────────────────────────────────────────
-    trabajos = [(a, p) for a in plan for p in activos]
+    # Se reparte el presupuesto POR ANGULO antes de aplicar el techo. Con un
+    # corte plano, los primeros angulos x todos los proveedores se comian los 8
+    # fetches y los demas no corrian nunca -- asi murio el angulo de LinkedIn
+    # en su primera medicion, sin que el sintoma lo dijera.
+    trabajos = [(a, p) for a in plan
+                for p in activos[: config.DECISOR_PROVEEDORES_POR_ANGULO]]
     trabajos.sort(key=lambda t: (t[0].prioridad, t[1].prioridad))
     descartados_por_techo = max(0, len(trabajos) - config.DECISOR_MAX_FETCHES)
     trabajos = trabajos[: config.DECISOR_MAX_FETCHES]
@@ -566,6 +590,50 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
                 angulo=ang, proveedor=prov,
                 origen="sitio_propio" if propio else "tercero",
                 donde=p["evidence"], empresa_en_texto=liga))
+
+    # ── Fase 2b: los perfiles de LinkedIn ────────────────────────────────────
+    # REGLA EXPLICITA: entre los resultados de busqueda se entra UNICAMENTE a
+    # perfiles de LinkedIn. El snippet no alcanza -- Brave devuelve el titulo
+    # como breadcrumb ("LinkedIn cl.linkedin.com in andresmarinkovic Andrés
+    # Marinkovic"), con nombre y sin cargo. El titulo de la PAGINA si trae
+    # nombre, cargo y empresa.
+    perfiles_leidos = 0
+    for it, ang, prov in crudos:
+        if perfiles_leidos >= config.DECISOR_MAX_PERFILES:
+            break
+        if time.monotonic() - t0 > config.DECISOR_BUDGET_S:
+            break
+        url = it.get("url", "")
+        if not linkedin_perfil.es_perfil(url) or url in visitadas:
+            continue
+        visitadas.add(url)
+        r = obtener(url, "linkedin", salud, timeout=config.DECISOR_FETCH_TIMEOUT)
+        fetches += 1
+        perfiles_leidos += 1
+        if not r.html:
+            continue
+        datos = linkedin_perfil.parsear_titulo(linkedin_perfil.titulo_de(r.html))
+        if not datos:
+            continue
+
+        coincide = linkedin_perfil.coincide_empresa(datos["empresa"], empresa)
+        pais_perfil = linkedin_perfil.pais_del_perfil(url)
+        # EL FALSO POSITIVO MEDIDO: "Houm" es una empresa chilena y tambien una
+        # india, y un directorio extranjero le colgo a la chilena dos fundadores
+        # que no son suyos. Cuando el perfil declara pais y NO es el pedido, no
+        # se atribuye. Se pierde a quien se mudo de pais; se gana no escribirle
+        # al fundador equivocado a nombre del cliente.
+        if pais_perfil and ubi.pais and pais_perfil != ubi.pais:
+            log.info("perfil %s descartado: pais %s != %s", url, pais_perfil, ubi.pais)
+            continue
+        if not coincide:
+            continue
+
+        agregar(Candidato(
+            nombre=datos["nombre"], cargo=datos["cargo"], url=url,
+            angulo="linkedin_perfil", proveedor="linkedin",
+            origen="linkedin_verificado", donde="pagina",
+            empresa_en_texto=True))
 
     # ── Fase 3: paginas de equipo que aparecieron en la busqueda ─────────────
     for url in _paginas_a_visitar(crudos, empresa, dominio):

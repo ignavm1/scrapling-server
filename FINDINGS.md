@@ -460,3 +460,76 @@ habia medido: "0 resultados desde Render"). Por eso las cinco fallidas dicen
 **Consecuencia: la palanca mas grande de cobertura hoy no es mas codigo, es
 configurar `PROXY_URL` en Render.** Sin proxy, el sistema entrega el ~17% que da
 el sitio propio; el resto queda a merced de un captcha.
+
+## F24 — CORRIGE A F7: los perfiles SI estan en el indice; el operador y el buscador eran el problema
+
+F7 concluyo, el 2026-08-30, que "los perfiles personales no estan en el indice
+publico". Esa conclusion se **generalizo de mas** y hay que corregirla.
+
+Lo que F7 midio realmente: `site:linkedin.com/in "<empresa>"` en **DuckDuckGo y
+Bing** devuelve cero. Eso sigue siendo cierto.
+
+Lo que se midio el 2026-09-04, sobre la misma empresa, cambiando dos cosas:
+
+    buscador   query                          perfiles /in/ en el HTML
+    brave      "Fintual" CEO linkedin         7
+    bing       "Fintual" CEO linkedin         0
+    ddg        "Fintual" CEO linkedin         (bloqueado)
+
+Brave devuelve siete perfiles. **El indice no era el problema: lo eran el
+operador `site:` y el buscador al que se le preguntaba.** F7 nunca probo Brave
+con la palabra suelta -- Brave se sumo despues, en F19.
+
+### F24.1 — Hay que ENTRAR al perfil; el snippet no alcanza
+
+Brave sirve el titulo del resultado como breadcrumb:
+
+    'LinkedIn cl.linkedin.com in andresmarinkovic Andrés Marinkovic'
+
+Hay nombre y no hay cargo, asi que el parser de SERP no produce nada. El titulo
+de la PAGINA, en cambio, lo trae todo:
+
+    'Andrés Marinkovic - Co Founder y COO en Fintual (YC S18) | LinkedIn'
+
+Se entra sin sesion, sin cookie y sin resolver ningun desafio: LinkedIn sirve el
+`<title>` y el `og:title` a cualquiera. El cuerpo esta detras de un muro de
+sesion y ahi se queda.
+
+### F24.2 — El subdominio de pais resuelve el homonimo
+
+`cl.linkedin.com/in/...` declara Chile. Es lo que faltaba para el falso positivo
+de F23: "Houm" es una empresa chilena y tambien una india, y un directorio
+extranjero le colgo a la chilena dos fundadores ajenos. Cuando el perfil declara
+un pais distinto al pedido, no se atribuye.
+
+### F24.3 — El angulo existia y no se ejecutaba nunca
+
+La primera medicion dio `linkedin=0` en las seis empresas. No era que el angulo
+fallara: **no habia corrido ni una vez**. Con el techo de fetches repartido de
+forma plana, `sitio_equipo` y `cargo_directo` por los cuatro proveedores se
+comian los 8 fetches y las queries de LinkedIn quedaban siempre fuera.
+
+Se reparte por angulo (2 proveedores cada uno): el mismo gasto cubre el doble de
+angulos. Angulos distintos alcanzan documentos distintos; proveedores distintos
+se solapan, y su valor es la resiliencia ante un bloqueo, no la cobertura.
+
+Tras el arreglo, sobre las mismas empresas:
+
+    Betterfly   Cristobal della Maggiora, Co-Founder & President   score 1.0
+    Buk         Jaime Arrieta, Founder                             via perfil
+
+En Betterfly el perfil verificado ademas DESPLAZO al falso positivo de F22.5
+("Eduardo Dillamajora", con el apellido mal escrito por la fuente).
+
+### F24.4 — Google sigue sin servir, y se volvio a medir
+
+No se cito la medicion vieja: el 2026-09-04 se pidio de nuevo
+`"Fintual" CEO site:linkedin.com/in` a Google desde IP residencial. Devuelve
+**92.457 bytes, status 200, cero perfiles y cero resultados extraibles**; el
+veredicto de `blocking.analizar` es `requiere-javascript`. Los resultados no
+estan en el HTML.
+
+Para usar Google literalmente haria falta su **API oficial de Custom Search**
+(una API key y un Search Engine ID). No hay ninguno configurado en el proyecto;
+el `GOOGLE_AI_API_KEY` que existe es de Gemini y no sirve para esto sin crear
+antes el buscador programable.

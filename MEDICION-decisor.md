@@ -1,15 +1,15 @@
 # Medicion en vivo — resolutor de decisor
 
-Fecha: **2026-09-03**. Proxy configurado: **NO**.
+Fecha: **2026-09-04**. Proxy configurado: **NO**.
 Generado por `bench/medir_decisor.py`. No editar a mano: se reescribe
 en cada corrida.
 
 | Empresa | Dominio | Veredicto | Decisores | Fetches | Paginas | Crudos | Bloqueados | ms |
 |---|---|---|---|---|---|---|---|---|
-| Fintual | fintual.cl | decisor | 1 | 3 | 2 | 0 | — | 2847 |
-| Buk | buk.cl | bloqueado | 0 | 10 | 3 | 20 | brave | 25017 |
-| Betterfly | betterfly.com | bloqueado | 0 | 10 | 3 | 21 | brave | 25011 |
-| Toteat | toteat.com | bloqueado | 0 | 10 | 1 | 20 | brave | 23183 |
+| Fintual | fintual.cl | decisor | 1 | 3 | 2 | 0 | — | 2770 |
+| Buk | buk.cl | bloqueado | 0 | 12 | 3 | 0 | brave, duckduckgo | 8150 |
+| Betterfly | betterfly.com | bloqueado | 0 | 12 | 3 | 0 | brave, duckduckgo | 8724 |
+| Toteat | toteat.com | bloqueado | 0 | 10 | 1 | 0 | brave, duckduckgo | 6277 |
 
 **Empresas con decisor encontrado: 1 de 4 (1 personas).**
 
@@ -27,6 +27,6 @@ Un vacio por bloqueo **no** significa que la empresa no publique a su
 decisor. Sin `PROXY_URL` los buscadores bloquean a los pocos requests
 (F1) y queda solo Bing, ya clasificado como fuente hostil (F6).
 
-- Buk: brave=captcha
-- Betterfly: brave=captcha
-- Toteat: brave=captcha
+- Buk: brave=captcha, duckduckgo=status-403
+- Betterfly: brave=captcha, duckduckgo=status-403
+- Toteat: brave=captcha, duckduckgo=status-403
