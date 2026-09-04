@@ -421,3 +421,42 @@ la empresa (1.0) sobre un tercero (0.65).
 
 Consecuencia operativa: un candidato de score 0.65 venido de un tercero vale
 para investigar, no para saludar por nombre sin mirar.
+
+## F23 — En produccion el cuello de botella es el proxy, no el codigo
+
+Medido el 2026-09-03 contra el servicio desplegado en Render (IP de datacenter,
+`/health` reporta `proxy: false`), resolviendo el decisor de seis empresas con
+dominio conocido.
+
+    Xepelin      OK   Sebastian Kreis, CEO   0.975   2.761ms   sin buscar
+    Lagencia     NO   providers_blocked              21.890ms  paginas=0
+    Agencia GL   NO   providers_blocked              21.595ms  paginas=0
+    Agensa       NO   providers_blocked              24.810ms  paginas=0
+    Khipu        NO   providers_blocked              23.980ms  paginas=2
+    Destacame    NO   providers_blocked              21.549ms  paginas=0
+
+**1 de 6 (17%).** El numero no es casualidad: coincide con lo ya medido del lado
+de Venara -- "sitio propio (paginas de equipo) ... 17% da una persona
+identificada". Dos mediciones independientes, con metodos distintos, dan lo
+mismo.
+
+### F23.1 — `paginas=0` no es un fallo del detector
+
+Se verifico sobre el HTML real. `lagencia.cl` sirve 209KB y 59 anclas, y sus 36
+rutas internas son: Inicio, Servicios (x4), Blog, Contacto, Agenda, Politica de
+Privacidad y notas del blog. **No existe pagina de equipo.** Idem agenciagl.cl y
+destacame.cl. La agencia no publica a su gente, y ningun parseo arregla eso.
+
+Donde SI existe, el camino funciona y es barato: Xepelin y Fintual se
+resolvieron en menos de 3 segundos sin gastar una sola busqueda.
+
+### F23.2 — La cobertura del 83% restante depende del proxy
+
+Para las empresas sin pagina de equipo el unico camino es buscar, y desde la IP
+de datacenter de Render los cuatro proveedores devuelven captcha (F1, que ya lo
+habia medido: "0 resultados desde Render"). Por eso las cinco fallidas dicen
+`providers_blocked` y tardan ~22s en decirlo.
+
+**Consecuencia: la palanca mas grande de cobertura hoy no es mas codigo, es
+configurar `PROXY_URL` en Render.** Sin proxy, el sistema entrega el ~17% que da
+el sitio propio; el resto queda a merced de un captcha.
