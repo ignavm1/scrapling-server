@@ -759,3 +759,34 @@ def test_prueba_las_rutas_de_contacto_habituales_si_la_home_no_las_enlaza(monkey
     monkeypatch.setattr(decisor, "obtener", _obtener)
     decisor.resolver(EMPRESA, DOMINIO, "Chile")
     assert any(u.endswith("/contacto") for u in pedidas), pedidas
+
+
+def test_un_vacio_por_timeout_no_se_reporta_como_empresa_sin_decisor(monkeypatch):
+    """MEDIDO (2026-09-04): cuatro empresas reportaron "no_publicado" con el
+    presupuesto agotado a los 25 segundos.
+
+    No es que no publiquen a nadie: los proveedores agotaron el tiempo sin
+    devolver nada. Un timeout NO marca al proveedor como bloqueado -- solo lo
+    hacen el captcha y los status -- asi que desaparecia en silencio y el
+    veredicto mentia. Es el mismo fallo que F1/F4 documentan como el mas caro
+    del servidor viejo, reaparecido por otra puerta.
+    """
+    def _muerto(url, proveedor, salud, timeout=None):
+        return _Rta(html="")          # ni captcha ni status: simplemente nada
+
+    monkeypatch.setattr(decisor, "obtener", _muerto)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert r["candidatos"] == []
+    assert r["diagnostico"]["motivo_vacio"] == "sin_acceso", r["diagnostico"]
+    assert r["diagnostico"]["fetches_fallidos"] > 0
+
+
+def test_control_positivo_una_busqueda_sana_y_vacia_si_dice_no_publicado(monkeypatch):
+    # Sin este control, la regla de arriba pasaria con un resolutor que dice
+    # "sin_acceso" siempre, y se perderia la distincion en el otro sentido.
+    vacio = "<html><body><div class='results'></div></body></html>"
+    _sin_red(monkeypatch, serp=vacio,
+             pagina="<html><body><p>Servicios de marketing</p></body></html>")
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert r["candidatos"] == []
+    assert r["diagnostico"]["motivo_vacio"] == "no_publicado", r["diagnostico"]

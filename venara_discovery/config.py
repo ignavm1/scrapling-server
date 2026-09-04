@@ -50,7 +50,11 @@ MAX_TITLES = 6
 # detalle de tuning: resolver el decisor se llama UNA VEZ POR EMPRESA, asi que
 # su costo se multiplica por el tamano del lote. `buscar_persona()` no tenia
 # ningun tope y una sola consulta tardo 4m43s medidos contra produccion.
-DECISOR_MAX_FETCHES = int(os.environ.get("DECISOR_MAX_FETCHES", "8"))
+# Sube de 8 a 12 al pasar a siete angulos. Con 8 y reparto por rondas, tres
+# angulos no llegaban a ejecutarse NUNCA -- el mismo fallo silencioso que ya
+# habia matado al angulo de LinkedIn (F24.3). Los fetches salen en paralelo
+# (MAX_CONCURRENCY), asi que 12 son dos oleadas, no doce esperas.
+DECISOR_MAX_FETCHES = int(os.environ.get("DECISOR_MAX_FETCHES", "12"))
 # Paginas del sitio de la empresa que se visitan para leer el equipo. Cada una
 # es un fetch completo, y la tercera casi nunca aporta lo que no dieron las dos
 # primeras.

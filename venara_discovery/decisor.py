@@ -42,8 +42,12 @@ import time
 from urllib.parse import urljoin, urlsplit
 from dataclasses import dataclass, field
 
-from . import (config, contacto as mod_contacto, extraction, filtering,
-               linkedin_perfil, personas, providers, website)
+# `cargos` y `contacto` van con alias porque `resolver()` recibe parametros con
+# esos mismos nombres, y sin el alias el parametro tapa al modulo -- el fallo
+# aparece recien en tiempo de ejecucion, como 'NoneType' has no attribute.
+from . import (cargos as mod_cargos, config, contacto as mod_contacto,
+               extraction, filtering, linkedin_perfil, personas, providers,
+               website)
 from .fetch import SaludProveedores, obtener
 from .linkedin import puntuar_cargo
 from .location import Ubicacion, interpretar
@@ -104,6 +108,7 @@ class Candidato:
             "origin": self.origen,
             "found_in": self.donde,
             "confidence": round(self.score, 3),
+            "seniority": mod_cargos.nivel(self.cargo),
             "evidence": self.evidencia,
             # Cada dato de contacto viaja con su procedencia: un email sin
             # origen no se puede auditar el dia que rebota.
@@ -154,10 +159,27 @@ def construir_plan(empresa: str, dominio: str, ubi: Ubicacion,
     plan.append(Angulo("prensa",
                        f'"{e}" ("asume como" OR "es el nuevo" OR "fue designado")', 6))
 
-    # 4) Entrevistas: el fundador hablando de su propia empresa.
+    # 5) Entrevistas: el fundador hablando de su propia empresa.
     plan.append(Angulo("entrevista",
                        f'"{e}" entrevista (fundador OR CEO OR "gerente general")'
                        + (f" {lugar}" if lugar else ""), 7))
+
+    # 6) Directorios de ejecutivos. No es una fuente teorica: en la medicion del
+    #    2026-09-03 fueron craft.co y theorg.com los que dieron al CEO de Buk y
+    #    al co-fundador correcto de Betterfly. Antes se llegaba ahi por
+    #    casualidad, desde el angulo de cargo directo; ahora se los busca a
+    #    proposito.
+    plan.append(Angulo("directorio_ejecutivo",
+                       f'"{e}" (executives OR "leadership team" OR '
+                       f'"equipo directivo" OR organigrama)', 8))
+
+    # 7) Representante legal. Es el angulo mas LATAM de todos: en licitaciones,
+    #    avisos y registros publicos la empresa declara QUIEN LA REPRESENTA, y
+    #    esa persona es por definicion la que firma. Ningun otro angulo mira
+    #    esos documentos.
+    plan.append(Angulo("representante_legal",
+                       f'"{e}" ("representante legal" OR "socio fundador" OR '
+                       f'"director ejecutivo")', 9))
 
     return plan
 
@@ -500,6 +522,13 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
     fetches = 0
     crudos: list[tuple[dict, str, str]] = []
     por_proveedor: dict[str, int] = {}
+    # Un fetch que se cae por timeout NO marca al proveedor como bloqueado
+    # (solo lo hacen el captcha y los status), asi que desaparecia en silencio y
+    # el veredicto terminaba diciendo "no_publicado". Contarlos es lo que
+    # permite distinguir "esta empresa no publica a nadie" de "no pudimos
+    # mirar" -- que es el fallo mas caro que documenta este repo (F1/F4).
+    fallidos = 0
+    presupuesto_agotado = False
 
     def agregar(c: Candidato) -> None:
         # Se exige la liga con la empresa. Sin ella el candidato es "un gerente
@@ -555,7 +584,7 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
                 for url in _paginas_de_contacto(dominio, salud):
                     leer_pagina(url, angulo="contacto")
                     break
-        ordenados = sorted(candidatos.values(), key=lambda c: -c.score)[:limite]
+        ordenados = mod_cargos.elegir_mejor(list(candidatos.values()))[:limite]
         texto = "\n".join(texto_sitio)
         emails = mod_contacto.emails_del_dominio(texto, dominio)
         pares = mod_contacto.emparejar(emails, [c.nombre for c in candidatos.values()])
@@ -569,13 +598,15 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         return {"candidatos": ordenados, "completo": True, "diagnostico": diag}
 
     # ── Fase 2: los buscadores ───────────────────────────────────────────────
-    # Se reparte el presupuesto POR ANGULO antes de aplicar el techo. Con un
-    # corte plano, los primeros angulos x todos los proveedores se comian los 8
-    # fetches y los demas no corrian nunca -- asi murio el angulo de LinkedIn
-    # en su primera medicion, sin que el sintoma lo dijera.
-    trabajos = [(a, p) for a in plan
-                for p in activos[: config.DECISOR_PROVEEDORES_POR_ANGULO]]
-    trabajos.sort(key=lambda t: (t[0].prioridad, t[1].prioridad))
+    # Reparto POR RONDAS, no por angulo completo. La ronda 1 le da un proveedor
+    # a CADA angulo; recien la ronda 2 reparte el segundo. Es lo unico que
+    # garantiza que los siete angulos se ejecuten al menos una vez: con el
+    # reparto anterior, los primeros angulos consumian el techo y los ultimos
+    # no corrian nunca -- el fallo silencioso que ya habia matado al angulo de
+    # LinkedIn (F24.3) y que con siete angulos habria matado a tres.
+    orden_plan = sorted(plan, key=lambda a: a.prioridad)
+    usables = activos[: config.DECISOR_PROVEEDORES_POR_ANGULO]
+    trabajos = [(a, usables[r]) for r in range(len(usables)) for a in orden_plan]
     descartados_por_techo = max(0, len(trabajos) - config.DECISOR_MAX_FETCHES)
     trabajos = trabajos[: config.DECISOR_MAX_FETCHES]
 
@@ -598,6 +629,7 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         restante = max(0.1, config.DECISOR_BUDGET_S - (time.monotonic() - t0))
         for fut in concurrent.futures.as_completed(futuros, timeout=restante):
             if time.monotonic() - t0 > config.DECISOR_BUDGET_S:
+                presupuesto_agotado = True
                 break
             try:
                 ang, prov, r = fut.result()
@@ -606,6 +638,7 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
                 continue
             fetches += 1
             if not r.sirve:
+                fallidos += 1
                 continue
             items, _ = extraction.extraer(r.page, r.html, prov.nombre)
             por_proveedor[prov.nombre] = por_proveedor.get(prov.nombre, 0) + len(items)
@@ -615,6 +648,7 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         # No es un error: es el presupuesto haciendo su trabajo. Lo ya extraido
         # se usa igual.
         log.warning("presupuesto agotado resolviendo '%s'", empresa)
+        presupuesto_agotado = True
     finally:
         for f in futuros:
             f.cancel()
@@ -713,7 +747,9 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
                 break
 
     candidatos = fusionar_mismo_humano(candidatos)
-    ordenados = sorted(candidatos.values(), key=lambda c: -c.score)[:limite]
+    # El primero es el que MEJOR CARGO tiene, no el mejor documentado: a quien
+    # hay que escribirle es al que firma.
+    ordenados = mod_cargos.elegir_mejor(list(candidatos.values()))[:limite]
 
     # ── Fase 5: buscar un email del dominio en la web abierta ───────────────
     # Cuando el sitio no publica ninguno -- que es lo normal en startups, con
@@ -756,13 +792,27 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
                         descartados_por_techo=descartados_por_techo)
     completo = diag["completo"]
 
+    diag["fetches_fallidos"] = fallidos
+    diag["presupuesto_agotado"] = presupuesto_agotado
     if not ordenados:
         # El motivo del vacio no es opcional: "esta empresa no publica a nadie"
         # y "los buscadores no nos dejaron mirar" se arreglan en lugares
         # distintos, y confundirlos ya costo una investigacion entera (F1/F4).
-        diag["motivo_vacio"] = ("providers_blocked" if diag["proveedores_bloqueados"]
-                                else "sin_resultados" if not crudos and not visitadas
-                                else "no_publicado")
+        #
+        # `sin_acceso` es el caso que faltaba y que la medicion del 2026-09-04
+        # dejo a la vista: cuatro empresas reportaron "no_publicado" con el
+        # presupuesto agotado a los 25s. No es que no publiquen -- es que los
+        # proveedores agotaron el tiempo sin devolver nada, y por timeout no
+        # quedan marcados como bloqueados.
+        if diag["proveedores_bloqueados"]:
+            motivo = "providers_blocked"
+        elif presupuesto_agotado or (fetches and fallidos >= max(1, fetches // 2)):
+            motivo = "sin_acceso"
+        elif not crudos and not visitadas:
+            motivo = "sin_resultados"
+        else:
+            motivo = "no_publicado"
+        diag["motivo_vacio"] = motivo
 
     log.info("decisor '%s' -> %d candidatos (%d crudos, %d fetches, %d paginas) en %dms%s",
              empresa, len(ordenados), len(crudos), fetches, len(visitadas), diag["ms"],

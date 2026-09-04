@@ -576,3 +576,60 @@ pudieron validar**: en la corrida del 2026-09-04 los cuatro proveedores estaban
 en captcha o timeout desde esta IP tras horas de medicion. Es el mismo cuello de
 botella de F23 -- sin `PROXY_URL` el sistema se queda sin buscadores, y aca eso
 significa quedarse sin la muestra.
+
+## F26 — Siete angulos, y elegir por CARGO en vez de por evidencia
+
+### F26.1 — Que se agrego, y por que esos dos
+
+    directorio_ejecutivo   "<empresa>" (executives OR "leadership team" OR
+                           "equipo directivo" OR organigrama)
+    representante_legal    "<empresa>" ("representante legal" OR
+                           "socio fundador" OR "director ejecutivo")
+
+El primero no es una fuente teorica: en la medicion del 2026-09-03 fueron
+craft.co y theorg.com los que dieron al CEO de Buk y al co-fundador de
+Betterfly. Se llegaba ahi por casualidad, desde el angulo de cargo directo;
+ahora se los busca a proposito.
+
+El segundo es el mas LATAM: en licitaciones, avisos y registros publicos la
+empresa declara QUIEN LA REPRESENTA, y esa persona es por definicion la que
+firma. Ningun otro angulo mira esos documentos.
+
+### F26.2 — Con siete angulos, el reparto de fetches vuelve a ser el cuello
+
+Con el reparto anterior (todos los proveedores del primer angulo, despues el
+segundo...) y el techo en 8, **tres de los siete angulos no se ejecutaban
+nunca**. Es exactamente el fallo de F24.3, que ya habia matado al angulo de
+LinkedIn, reaparecido a mayor escala.
+
+Ahora el reparto es POR RONDAS: la ronda 1 le da un proveedor a CADA angulo, la
+ronda 2 reparte el segundo. El techo subio a 12 -- son dos oleadas en paralelo,
+no doce esperas. Hay un test que falla si el techo baja del numero de angulos.
+
+### F26.3 — Se elige al que firma, no al mejor documentado
+
+El score mezcla calidad del cargo con calidad de la evidencia, asi que un
+"Gerente de Marketing" publicado en el sitio propio le ganaba a un "CEO" con
+evidencia mediana. A quien hay que escribirle es al que firma.
+
+La eleccion pasa a ser en dos pasos: **nivel de cargo primero, evidencia solo
+para desempatar dentro del nivel**. Los niveles son fundador > ejecutivo >
+c_level > area > mando > otro, derivados de los pesos que ya estaban medidos.
+
+Con un piso: un cargo alto solo lidera si supera 0.55 de evidencia. Sin el, un
+"CEO" recogido de un blog cualquiera desplazaria a un "Gerente General"
+publicado en el sitio de la empresa. Hay un control que demuestra que sin el
+piso la eleccion se rompe.
+
+### F26.4 — "no publica a nadie" no es lo mismo que "no pudimos mirar", otra vez
+
+La medicion post-cambio devolvio cuatro empresas con motivo **`no_publicado` y
+el presupuesto agotado a los 25 segundos**. No es que no publiquen: los
+proveedores agotaron el tiempo sin devolver nada.
+
+La causa: un fetch caido por timeout NO marca al proveedor como bloqueado --
+solo lo hacen el captcha y los status--, asi que los timeouts desaparecian en
+silencio y el veredicto mentia. Es F1/F4 otra vez, entrando por otra puerta.
+
+Se agrego el motivo **`sin_acceso`** y se cuentan los fetches fallidos. Un
+veredicto de "no publica" ahora exige que de verdad se haya podido mirar.

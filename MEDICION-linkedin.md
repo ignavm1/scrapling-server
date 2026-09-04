@@ -5,12 +5,12 @@ Generado por `bench/medir_linkedin.py`. No editar a mano.
 
 | Empresa | Veredicto | Decisores | De perfil LinkedIn | Fetches | Bloqueados | ms |
 |---|---|---|---|---|---|---|
-| Fintual | decisor | 1 | 0 | 4 | — | 5201 |
-| Buk | bloqueado | 0 | 0 | 10 | brave | 25005 |
-| Xepelin | decisor | 1 | 0 | 3 | — | 5008 |
-| Betterfly | bloqueado | 0 | 0 | 9 | brave | 25007 |
-| Houm | bloqueado | 0 | 0 | 10 | brave | 25658 |
-| Toteat | bloqueado | 0 | 0 | 9 | brave | 25006 |
+| Fintual | decisor | 1 | 0 | 4 | — | 5206 |
+| Buk | no_publicado | 0 | 0 | 5 | — | 25014 |
+| Xepelin | decisor | 1 | 0 | 3 | — | 4989 |
+| Betterfly | no_publicado | 0 | 0 | 5 | — | 25004 |
+| Houm | no_publicado | 0 | 0 | 5 | — | 25007 |
+| Toteat | no_publicado | 0 | 0 | 5 | — | 25006 |
 
 **Empresas resueltas: 2 de 6. Decisores desde un perfil de LinkedIn: 0.**
 
