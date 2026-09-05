@@ -790,3 +790,134 @@ def test_control_positivo_una_busqueda_sana_y_vacia_si_dice_no_publicado(monkeyp
     r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
     assert r["candidatos"] == []
     assert r["diagnostico"]["motivo_vacio"] == "no_publicado", r["diagnostico"]
+
+
+# ── D9: el perfil de LinkedIn es un CANAL ───────────────────────────────────
+
+def test_el_perfil_de_linkedin_viaja_como_canal_no_solo_como_procedencia(monkeypatch):
+    # `url` significa "de donde salio el dato" y puede ser un diario. El perfil
+    # es otra cosa: es una via para escribirle. La app tiene un sistema de
+    # outreach entero esperando justamente esa URL.
+    perfil = ('<html><head><title>Matias Bravo - Gerente General en '
+              'Onza Marketing | LinkedIn</title></head><body></body></html>')
+    serp = ('<html><body><div class="results"><div class="result">'
+            '<a class="result__a" href="https://cl.linkedin.com/in/mbravo">Matias</a>'
+            '<a class="result__snippet" href="https://cl.linkedin.com/in/mbravo">'
+            'Onza Marketing</a></div></div></body></html>')
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if "linkedin.com/in" in url:
+            return _Rta(html=perfil)
+        if proveedor == "sitio":
+            return _Rta(html="")
+        return _Rta(html=serp)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    r = decisor.resolver(EMPRESA, "", "Santiago, Chile")
+    mejor = r["candidatos"][0]
+    assert mejor.perfil_linkedin == "https://cl.linkedin.com/in/mbravo"
+    assert mejor.a_dict()["contact"]["linkedin_url"] == "https://cl.linkedin.com/in/mbravo"
+
+
+def test_un_decisor_que_no_salio_de_linkedin_no_inventa_un_perfil(monkeypatch):
+    _sin_red(monkeypatch)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    mejor = r["candidatos"][0]
+    assert mejor.perfil_linkedin == ""
+    assert (mejor.a_dict()["contact"] or {}).get("linkedin_url", "") == ""
+
+
+def test_la_fusion_no_pierde_el_canal_de_linkedin():
+    # Si la lectura ganadora no traia perfil, fusionar borraria el canal.
+    from venara_discovery.normalize import clave_nombre
+    con = _c("Jaime Arrieta Boetsch", 0.62)
+    con.perfil_linkedin = "https://cl.linkedin.com/in/jarrieta"
+    sin = _c("Jaime Arrieta", 0.65)
+    salida = decisor.fusionar_mismo_humano({clave_nombre(con.nombre): con,
+                                            clave_nombre(sin.nombre): sin})
+    unico = list(salida.values())[0]
+    assert unico.nombre == "Jaime Arrieta"          # gana el de mejor score
+    assert unico.perfil_linkedin == "https://cl.linkedin.com/in/jarrieta"
+
+
+def test_busca_el_perfil_de_quien_ya_encontro_por_otra_via(monkeypatch):
+    """MEDIDO (2026-09-04): Fintual y Xepelin se resolvieron por el sitio propio
+    y quedaron con CERO canales -- no publican email ni telefono, y como la
+    persona no vino de un perfil, tampoco habia LinkedIn.
+
+    Con el nombre en la mano la consulta es precisa: "Matias Bravo" "Onza
+    Marketing" linkedin apunta a una persona concreta.
+    """
+    equipo = ("<html><head><title>Equipo</title></head><body>"
+              "<h3>Matias Bravo</h3><p>Gerente General</p></body></html>")
+    perfil = ('<html><head><title>Matias Bravo - Gerente General en '
+              'Onza Marketing | LinkedIn</title></head><body></body></html>')
+    serp = ('<html><body><div class="results"><div class="result">'
+            '<a class="result__a" href="https://cl.linkedin.com/in/mbravo">Matias</a>'
+            '<a class="result__snippet" href="https://cl.linkedin.com/in/mbravo">'
+            'Onza Marketing</a></div></div></body></html>')
+
+    # El SERP solo devuelve el perfil cuando la consulta lleva el NOMBRE: asi
+    # el test aisla la fase que busca a la persona, y no la de la fase 2b que
+    # busca por cargo. Sin esa distincion, el test pasaria sin probar nada.
+    def _obtener(url, proveedor, salud, timeout=None):
+        if "linkedin.com/in" in url:
+            return _Rta(html=perfil)
+        if proveedor == "sitio":
+            return _Rta(html=equipo)
+        lleva_el_nombre = "Matias" in url or "Matias%20Bravo" in url or "Matias+Bravo" in url
+        return _Rta(html=serp if lleva_el_nombre else
+                    "<html><body><div class='results'></div></body></html>")
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Santiago, Chile")
+    mejor = r["candidatos"][0]
+    assert mejor.nombre == "Matias Bravo"
+    assert mejor.perfil_linkedin == "https://cl.linkedin.com/in/mbravo"
+    assert any("confirmado" in e for e in mejor.evidencia), mejor.evidencia
+
+
+def test_no_le_cuelga_a_nuestro_decisor_el_perfil_de_un_homonimo(monkeypatch):
+    # Un perfil equivocado es peor que ninguno: la campaña le escribe a otra
+    # persona a nombre del cliente.
+    equipo = ("<html><head><title>Equipo</title></head><body>"
+              "<h3>Matias Bravo</h3><p>Gerente General</p></body></html>")
+    otro = ('<html><head><title>Matias Bravo - Gerente en Otra Empresa'
+            ' | LinkedIn</title></head><body></body></html>')
+    serp = ('<html><body><div class="results"><div class="result">'
+            '<a class="result__a" href="https://cl.linkedin.com/in/otromatias">M</a>'
+            '<a class="result__snippet" href="https://cl.linkedin.com/in/otromatias">'
+            'Onza Marketing</a></div></div></body></html>')
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if "linkedin.com/in" in url:
+            return _Rta(html=otro)
+        if proveedor == "sitio":
+            return _Rta(html=equipo)
+        return _Rta(html=serp)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+    assert r["candidatos"][0].perfil_linkedin == ""
+
+
+def test_no_gasta_la_busqueda_si_el_decisor_ya_trae_perfil(monkeypatch):
+    consultas = []
+    perfil = ('<html><head><title>Matias Bravo - Gerente General en '
+              'Onza Marketing | LinkedIn</title></head><body></body></html>')
+    serp = ('<html><body><div class="results"><div class="result">'
+            '<a class="result__a" href="https://cl.linkedin.com/in/mbravo">M</a>'
+            '<a class="result__snippet" href="https://cl.linkedin.com/in/mbravo">'
+            'Onza Marketing</a></div></div></body></html>')
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if "linkedin.com/in" in url:
+            return _Rta(html=perfil)
+        if proveedor == "sitio":
+            return _Rta(html="")
+        consultas.append(url)
+        return _Rta(html=serp)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    decisor.resolver(EMPRESA, "", "Chile")
+    assert not any("Matias" in u or "Matias%20Bravo" in u for u in consultas), consultas
