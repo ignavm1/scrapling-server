@@ -97,6 +97,10 @@ class Candidato:
     evidencia: list[str] = field(default_factory=list)
     # Por que canal se alcanza. Se llena al final, cuando ya se sabe quien es.
     contacto: dict = field(default_factory=dict)
+    # URL del perfil, cuando el candidato salio de uno. Es un CANAL por derecho
+    # propio -- se le puede escribir por ahi -- y por eso no alcanza con dejarlo
+    # en `url`, que significa "de donde salio el dato" y puede ser un diario.
+    perfil_linkedin: str = ""
 
     def a_dict(self) -> dict:
         return {
@@ -112,7 +116,10 @@ class Candidato:
             "evidence": self.evidencia,
             # Cada dato de contacto viaja con su procedencia: un email sin
             # origen no se puede auditar el dia que rebota.
-            "contact": self.contacto or None,
+            "contact": ({**self.contacto, "linkedin_url": self.perfil_linkedin}
+                        if self.contacto else
+                        ({"linkedin_url": self.perfil_linkedin}
+                         if self.perfil_linkedin else None)),
         }
 
 
@@ -476,9 +483,13 @@ def fusionar_mismo_humano(candidatos: dict[str, Candidato]) -> dict[str, Candida
             # Se conserva la evidencia de las dos vistas: que la misma persona
             # aparezca en dos fuentes es informacion, no ruido.
             c.evidencia = c.evidencia + [f"tambien visto como \"{actual.nombre}\""]
+            # Y el perfil NO se pierde: si la lectura ganadora no lo traia, el
+            # canal de LinkedIn desapareceria por haber fusionado.
+            c.perfil_linkedin = c.perfil_linkedin or actual.perfil_linkedin
             fusionadas[destino] = c
         else:
             actual.evidencia = actual.evidencia + [f"tambien visto como \"{c.nombre}\""]
+            actual.perfil_linkedin = actual.perfil_linkedin or c.perfil_linkedin
     return fusionadas
 
 
@@ -721,7 +732,7 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
             nombre=datos["nombre"], cargo=datos["cargo"], url=url,
             angulo="linkedin_perfil", proveedor="linkedin",
             origen="linkedin_verificado", donde="pagina",
-            empresa_en_texto=True))
+            empresa_en_texto=True, perfil_linkedin=url))
 
     # ── Fase 3: paginas de equipo que aparecieron en la busqueda ─────────────
     for url in _paginas_a_visitar(crudos, empresa, dominio):
@@ -750,6 +761,55 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
     # El primero es el que MEJOR CARGO tiene, no el mejor documentado: a quien
     # hay que escribirle es al que firma.
     ordenados = mod_cargos.elegir_mejor(list(candidatos.values()))[:limite]
+
+    # ── Fase 4b: el perfil de LinkedIn de QUIEN YA ENCONTRAMOS ──────────────
+    # MEDIDO (2026-09-04): Fintual y Xepelin se resolvieron por el sitio propio
+    # -- Omar Larre y Sebastian Kreis, score 1.0 -- y quedaron con CERO canales:
+    # esos sitios no publican email ni telefono, y como la persona no vino de un
+    # perfil, tampoco habia LinkedIn. Encontrar al decisor y no tener por donde
+    # escribirle vale lo mismo que no haberlo encontrado.
+    #
+    # Con el nombre en la mano la consulta es mucho mas precisa que la de la
+    # fase 2: "Omar Larre" "Fintual" linkedin apunta a una persona concreta, no
+    # a un cargo generico. Se hace SOLO para el mejor candidato y SOLO si le
+    # falta el canal: uno o dos fetches, no uno por persona.
+    if ordenados and not ordenados[0].perfil_linkedin:
+        mejor = ordenados[0]
+        consulta = f'"{mejor.nombre}" "{empresa}" linkedin'
+        for prov in activos[: config.DECISOR_PROVEEDORES_POR_ANGULO]:
+            if time.monotonic() - t0 > config.DECISOR_BUDGET_S:
+                break
+            r = obtener(providers.construir_url(prov.nombre, consulta, ubi),
+                        prov.nombre, salud, timeout=config.DECISOR_FETCH_TIMEOUT)
+            fetches += 1
+            if not r.sirve:
+                continue
+            items, _ = extraction.extraer(r.page, r.html, prov.nombre)
+            encontrado = False
+            for it in items:
+                url = it.get("url", "")
+                if not linkedin_perfil.es_perfil(url) or url in visitadas:
+                    continue
+                visitadas.add(url)
+                rp = obtener(url, "linkedin", salud,
+                             timeout=config.DECISOR_FETCH_TIMEOUT)
+                fetches += 1
+                datos = linkedin_perfil.parsear_titulo(
+                    linkedin_perfil.titulo_de(rp.html or ""))
+                if not datos:
+                    continue
+                # Se exige que el perfil sea de ESTA persona y de ESTA empresa.
+                # Sin las dos condiciones se le colgaria a nuestro decisor el
+                # perfil de un homonimo, que es peor que no tener perfil.
+                mismo = clave_nombre(datos["nombre"]) == clave_nombre(mejor.nombre)
+                if mismo and linkedin_perfil.coincide_empresa(datos["empresa"], empresa):
+                    mejor.perfil_linkedin = url
+                    mejor.evidencia = mejor.evidencia + [
+                        "perfil de LinkedIn confirmado: mismo nombre y misma empresa"]
+                    encontrado = True
+                    break
+            if encontrado:
+                break
 
     # ── Fase 5: buscar un email del dominio en la web abierta ───────────────
     # Cuando el sitio no publica ninguno -- que es lo normal en startups, con
