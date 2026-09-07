@@ -5,3 +5,4 @@ ruvector.db
 
 # Herramientas locales, no del proyecto
 .claude-flow/
+.gstack/

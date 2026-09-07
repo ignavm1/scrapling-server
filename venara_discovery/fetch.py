@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from scrapling.fetchers import FetcherSession
 
-from . import blocking, config
+from . import blocking, config, security
 
 log = logging.getLogger(__name__)
 
@@ -90,10 +90,28 @@ class SaludProveedores:
 
 def obtener(url: str, proveedor: str, salud: SaludProveedores,
             timeout: int | None = None) -> Respuesta:
-    """Un fetch, con analisis de bloqueo incluido."""
+    """Un fetch, con analisis de bloqueo y validacion SSRF incluidos.
+
+    LA VALIDACION VA ACA Y NO EN CADA LLAMADOR, y no es comodidad: por esta
+    funcion salen las QUINCE llamadas de red del paquete. Validar en el llamador
+    significa quince lugares donde olvidarse, y la auditoria del 2026-09-07
+    encontro exactamente eso -- cero validaciones en fetch.py, decisor.py,
+    website.py y personas.py, con el campo `domain` del request llegando sin
+    control hasta el socket.
+
+    Un cuello unico se audita con un grep; quince no.
+    """
     motivo = salud.esta_bloqueado(proveedor)
     if motivo:
         return Respuesta(proveedor, url, error="omitido:" + motivo)
+
+    # Solo http/https hacia hosts publicos. Bloquea loopback, redes privadas,
+    # link-local (169.254.169.254, la metadata de la nube), CGNAT y IPv4
+    # mapeada en IPv6. Un fallo aca NO es un error del sistema: es una URL que
+    # no se debe pedir, y se devuelve como cualquier otro descarte.
+    if not security.is_safe_public_url(url):
+        log.warning("fetch bloqueado: url no permitida (%s)", proveedor)
+        return Respuesta(proveedor, url, error="url-no-permitida")
 
     salud.esperar_turno(proveedor)
     t0 = time.monotonic()

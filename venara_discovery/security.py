@@ -62,9 +62,10 @@ def is_safe_public_url(url: str) -> bool:
     atacante puede cambiar el registro y apuntar a 127.0.0.1 -- eso es DNS
     rebinding, y ninguna funcion de validacion por nombre lo puede cerrar sola.
 
-    El cierre real esta en `url_con_ip_fijada()`, que resuelve UNA vez y valida
-    esa IP antes de conectar.
-    Esta funcion queda como primer filtro barato y por retrocompatibilidad.
+    El cierre real esta en `peer_es_publico()`, que mira la IP del socket ya
+    conectado -- la unica que no se puede envenenar entre la validacion y la
+    conexion. Esta funcion queda como primer filtro barato: rechaza lo obvio
+    sin gastar una conexion.
     """
     if not url or len(url) > config.MAX_URL_LEN:
         return False
@@ -128,23 +129,33 @@ def leer_acotado(resp, max_bytes: int = None) -> str:
     return datos.decode("utf-8", errors="ignore")
 
 
-def url_con_ip_fijada(url: str) -> tuple[str, str] | None:
-    """Devuelve (url_con_ip, host_original) con la IP ya validada incrustada.
+def ip_conectada(resp) -> str:
+    """IP a la que de verdad se conecto esta respuesta, o "" si no se puede ver.
 
-    Asi se cierra el rebinding: se resuelve UNA vez, se valida esa IP, y se
-    conecta a esa misma IP mandando el Host original en la cabecera. No hay
-    segunda resolucion que envenenar.
-
-    Se usa en el camino de fallback (urllib), que es el unico donde controlamos
-    el socket.
+    Se lee del socket, no del DNS. Es la unica fuente que no se puede envenenar
+    entre la validacion y la conexion.
     """
     try:
-        p = urlparse(url)
+        return resp.fp.raw._sock.getpeername()[0]
     except Exception:
-        return None
-    if p.scheme not in ("http", "https") or not p.hostname:
-        return None
-    ips = resolver_ips(p.hostname)
-    if not ips or not all(ip_es_publica(ip) for ip in ips):
-        return None
-    return url, p.hostname
+        return ""
+
+
+def peer_es_publico(resp) -> bool:
+    """La conexion termino en una IP publica?
+
+    ESTE es el cierre real del DNS rebinding, y reemplaza a la
+    `url_con_ip_fijada()` que vivia aca: aquella prometia "IP validada
+    incrustada" en su nombre y su docstring, y devolvia la URL sin tocar. Era
+    codigo muerto (cero llamadas) y ademas no hacia lo que decia -- la
+    auditoria del 2026-09-07 encontro las dos cosas.
+
+    Validar el socket funciona para http y para https por igual. Fijar la IP en
+    la URL, en cambio, rompe la verificacion del certificado en https, que es
+    justamente donde mas importa.
+
+    Devuelve False cuando no se puede determinar la IP: si no sabemos adonde
+    nos conectamos, no leemos la respuesta.
+    """
+    ip = ip_conectada(resp)
+    return bool(ip) and ip_es_publica(ip)

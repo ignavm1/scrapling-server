@@ -10,6 +10,7 @@ lista vacia y Venara concluia que el nicho no tenia empresas (F1/F4).
 """
 from __future__ import annotations
 import logging
+import re
 import secrets
 import urllib.request
 from contextlib import asynccontextmanager
@@ -44,11 +45,33 @@ app = FastAPI(title="Venara Discovery Engine", version=config.VERSION, lifespan=
 
 
 def require_api_key(x_api_key: str = Header(default="")):
+    """Autenticacion que falla CERRADA.
+
+    La version anterior era `if config.API_KEY and not compare_digest(...)`: sin
+    la variable seteada, el cuerpo entero se salteaba y el Depends no rechazaba
+    nada. Medido el 2026-09-07 contra produccion: /scrape-website y
+    /find-decision-maker devolvian 200 con datos reales SIN cabecera alguna.
+
+    El servidor quedaba de proxy de scraping gratuito, y con PROXY_URL puesto
+    eso pasa a ser plata del duenio. Peor: exponia a internet el SSRF del campo
+    `domain`.
+
+    Ahora, sin credencial configurada, se rechaza. Un servidor que no puede
+    autenticar no debe atender: preferimos que se note al desplegar y no meses
+    despues, en el log de un tercero.
+    """
+    if not config.API_KEY:
+        if config.PERMITIR_SIN_AUTH:
+            return          # escape local, declarado a mano por el operador
+        raise HTTPException(
+            status_code=503,
+            detail="server misconfigured: API_KEY not set. Set API_KEY, or "
+                   "PERMITIR_SIN_AUTH=1 for local development.")
     # Comparar BYTES, no str: compare_digest sobre str lanza TypeError con
     # cualquier caracter no-ASCII, y ese TypeError sale como 500. Eso convertia
     # al propio chequeo de auth en un vector de denegacion de servicio:
     # bastaba mandar "X-API-Key: cafe" con acento para tumbar el endpoint.
-    if config.API_KEY and not secrets.compare_digest(
+    if not secrets.compare_digest(
             x_api_key.encode("utf-8"), config.API_KEY.encode("utf-8")):
         raise HTTPException(status_code=401, detail="invalid or missing api key")
 
@@ -117,6 +140,33 @@ class PeopleSearchRequest(BaseModel):
         return out
 
 
+def _dominio_valido(valor: str) -> str:
+    """Sanea el dominio del request. Vacio si no es un dominio publico.
+
+    Se valida en el MODELO y no dentro del resolutor porque aca todavia se
+    puede rechazar barato. La auditoria del 2026-09-07 trazo este campo desde
+    el request hasta el socket sin un solo control: `domain: "169.254.169.254"`
+    hacia que el servidor pidiera la metadata de la nube desde adentro.
+    """
+    d = (valor or "").strip().lower()
+    d = d.replace("https://", "").replace("http://", "").replace("www.", "")
+    d = d.split("/")[0].strip()
+    if not d:
+        return ""
+    # Chequeo SINTACTICO, sin tocar la red. Un dominio termina en letras; una IP
+    # literal termina en digitos, y "localhost:8765" no tiene TLD. Eso descarta
+    # la forma directa del ataque sin costo.
+    #
+    # La validacion por IP NO va aca a proposito: resolver DNS dentro del
+    # parseo del request lo vuelve lento y ademas regala un vector -- cien
+    # peticiones con dominios de resolucion lenta cuelgan el servidor. Esa capa
+    # vive en fetch.obtener(), que es donde de verdad se conecta y donde una
+    # resolucion que devuelve 127.0.0.1 queda igual de bloqueada.
+    if not re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}(:\d{1,5})?", d):
+        return ""
+    return d
+
+
 class DecisionMakerRequest(BaseModel):
     """Entrada del resolutor de decisor.
 
@@ -129,6 +179,11 @@ class DecisionMakerRequest(BaseModel):
     domain: str = Field(default="", max_length=config.MAX_URL_LEN)
     location: str = Field(default="", max_length=config.MAX_LOCATION_LEN)
     titles: list[str] = Field(default_factory=list)
+
+    @property
+    def dominio(self) -> str:
+        """El dominio ya saneado. "" cuando no es publico o no es un dominio."""
+        return _dominio_valido(self.domain)
     max_results: int | None = Field(default=None, ge=1, le=config.MAX_RESULTS_CAP)
     maxResults: int | None = Field(default=None, ge=1, le=config.MAX_RESULTS_CAP)
 
@@ -167,6 +222,11 @@ class LinkedInRequest(BaseModel):
     # funcionando exactamente igual que antes.
     domain: str = Field(default="", max_length=config.MAX_URL_LEN)
 
+    @property
+    def dominio(self) -> str:
+        """El dominio ya saneado. "" cuando no parece un dominio publico."""
+        return _dominio_valido(self.domain)
+
 
 @app.get("/health")
 def health():
@@ -176,6 +236,8 @@ def health():
         "version": config.VERSION,
         "proxy": bool(config.PROXY_URL),
         "auth": bool(config.API_KEY),
+        # Un servidor sin credencial y sin escape declarado no atiende nada.
+        "misconfigured": not config.API_KEY and not config.PERMITIR_SIN_AUTH,
         "cache": len(CACHE),
     }
 
@@ -258,6 +320,11 @@ def scrape_website(req: WebsiteRequest):
             # inutil la validacion inicial.
             if not security.is_safe_public_url(resp.geturl()):
                 raise ValueError("url final no permitida")
+            # Y validar la IP del SOCKET, no el nombre: entre la resolucion que
+            # valido la URL y la que uso la conexion, un dominio con TTL 0 pudo
+            # cambiar de registro. Se mira antes de leer el cuerpo.
+            if not security.peer_es_publico(resp):
+                raise ValueError("conexion a ip no permitida")
             html = security.leer_acotado(resp)
         if len(html) > 100:
             return {"clean_text": limpiar_html(html), "url": url, "method": "urllib"}
@@ -290,7 +357,7 @@ def search_linkedin(req: LinkedInRequest):
         return {"person_name": "NOT_FOUND", "person_title": "",
                 "linkedin_url": "", "source": "no_company"}
 
-    salida = decisor.resolver(empresa, req.domain.strip(), req.location.strip(), None, 1)
+    salida = decisor.resolver(empresa, req.dominio, req.location.strip(), None, 1)
     diag = salida["diagnostico"]
     if not salida["candidatos"]:
         return {"person_name": "NOT_FOUND", "person_title": "", "linkedin_url": "",
@@ -405,7 +472,7 @@ def find_decision_maker(req: DecisionMakerRequest):
         return {"found": False, "person": None, "alternatives": [],
                 "reason": "no_company", "complete": False, "blocked_providers": {}}
 
-    salida = decisor.resolver(empresa, req.domain.strip(), req.location.strip(),
+    salida = decisor.resolver(empresa, req.dominio, req.location.strip(),
                               req.cargos, req.limite)
     diag = salida["diagnostico"]
     candidatos = [c.a_dict() for c in salida["candidatos"]]

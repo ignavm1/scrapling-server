@@ -12,6 +12,14 @@ VERSION = "6.1.0"
 PROXY_URL = os.environ.get("PROXY_URL") or None
 API_KEY = os.environ.get("API_KEY") or None
 
+# Escape EXPLICITO para desarrollo local.
+#
+# Sin API_KEY el servidor rechaza todo (ver require_api_key). Eso es lo correcto
+# en produccion y un estorbo en la maquina de uno, asi que hay una salida -- pero
+# tiene que declararla el operador a mano. Nunca se activa sola: un default que
+# abre el servidor es exactamente como se llego al hallazgo que esto cierra.
+PERMITIR_SIN_AUTH = os.environ.get("PERMITIR_SIN_AUTH") == "1"
+
 FETCH_TIMEOUT = int(os.environ.get("FETCH_TIMEOUT", "15"))
 # Presupuesto TOTAL de una busqueda. El cliente de Venara corta a los 45s; sin
 # este tope el server sigue trabajando (y gastando proxy) para nadie -- F12.
