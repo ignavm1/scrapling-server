@@ -53,6 +53,11 @@ DIRECTORIOS = {
     "mercadolibre.com", "amazon.com", "ebay.com", "alibaba.com",
     "booking.com", "airbnb.com", "doplim.com", "olx.com",
     "cylex.com", "infoisinfo.com", "hotfrog.com", "tuugo.com", "opendi.com",
+    # MEDIDO (2026-09-06): agencies.semrush.com entro como "agencia" en una
+    # busqueda de agencias de marketing. Es el directorio de partners de
+    # Semrush -- lista agencias, no es una.
+    "semrush.com", "similarweb.com", "ahrefs.com", "g2.com", "capterra.com",
+    "producthunt.com", "wellfound.com", "angel.co", "theorg.com", "craft.co",
     "yellowpages.com", "guiatelefonica.com", "encuentra24.com",
     "restaurantguru.com", "degusta.com", "thefork.com", "zomato.com",
 }

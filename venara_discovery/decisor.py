@@ -40,6 +40,11 @@ import logging
 import re
 import time
 from urllib.parse import urljoin, urlsplit
+
+
+def host_de_url(url: str) -> str:
+    """Host de una URL, para contar fuentes independientes."""
+    return (urlsplit(url or "").hostname or "").lower().replace("www.", "")
 from dataclasses import dataclass, field
 
 # `cargos` y `contacto` van con alias porque `resolver()` recibe parametros con
@@ -97,10 +102,28 @@ class Candidato:
     evidencia: list[str] = field(default_factory=list)
     # Por que canal se alcanza. Se llena al final, cuando ya se sabe quien es.
     contacto: dict = field(default_factory=dict)
+    # Cuantas fuentes independientes vieron este nombre. Una sola fuente de
+    # tercero no confirma la ORTOGRAFIA: aparecio "Eduardo Dillamajora" por
+    # Della Maggiora, escrito de oido en un transcript de podcast. No se
+    # corrige -- adivinar ortografia introduce un error peor que el que
+    # resuelve -- pero se dice que no esta confirmado.
+    fuentes: set = field(default_factory=set)
     # URL del perfil, cuando el candidato salio de uno. Es un CANAL por derecho
     # propio -- se le puede escribir por ahi -- y por eso no alcanza con dejarlo
     # en `url`, que significa "de donde salio el dato" y puede ser un diario.
     perfil_linkedin: str = ""
+
+    @property
+    def nombre_confirmado(self) -> bool:
+        """La ortografia del nombre esta respaldada.
+
+        Basta con una de dos: que venga del sitio de la propia empresa o de un
+        perfil de LinkedIn -- donde lo escribe quien lo sabe -- o que dos
+        fuentes independientes coincidan.
+        """
+        if self.origen in ("sitio_propio", "linkedin_verificado"):
+            return True
+        return len(self.fuentes) >= 2
 
     def a_dict(self) -> dict:
         return {
@@ -113,6 +136,11 @@ class Candidato:
             "found_in": self.donde,
             "confidence": round(self.score, 3),
             "seniority": mod_cargos.nivel(self.cargo),
+            # Un nombre visto en UNA sola fuente de tercero no tiene la
+            # ortografia confirmada. No se corrige: se avisa, para que la
+            # campana no salude por nombre sin que alguien lo mire.
+            "name_confirmed": self.nombre_confirmado,
+            "sources": sorted(self.fuentes),
             "evidence": self.evidencia,
             # Cada dato de contacto viaja con su procedencia: un email sin
             # origen no se puede auditar el dia que rebota.
@@ -209,6 +237,45 @@ def _normalizar_palabras(texto: str) -> str:
     "nuestroequipo" y toda liga con la empresa daba False.
     """
     return " " + re.sub(r"[^a-z0-9]+", " ", sin_acentos(texto or "").lower()).strip() + " "
+
+
+# TLD de dos letras que se usan como GENERICOS, no como pais. `.co` es
+# Colombia y tambien "company"; `.io` es el Oceano Indico y nadie lo usa por
+# eso. Tratarlos como pais descartaria empresas legitimas.
+_TLD_NEUTROS = {"co", "io", "ai", "me", "tv", "cc", "ly", "sh", "gg", "to", "fm"}
+
+
+def pais_del_dominio(url: str) -> str:
+    """Pais que declara el dominio, o "" si no declara ninguno.
+
+    Se resuelve por REGLA y no por lista blanca: todo TLD de dos letras es un
+    codigo de pais por definicion, salvo el punado que se usa como generico.
+    Una lista blanca deja pasar en silencio cualquier pais que falte -- y asi
+    entro `yourstory.in`, un directorio indio, en una busqueda chilena.
+
+    Un `.com` NO declara pais: la mayoria de las empresas chilenas usa .com y
+    .cl indistintamente, y tratar el neutro como extranjero tiraria mas de lo
+    que salva.
+    """
+    host = (urlsplit(url).hostname or "").lower()
+    if not host:
+        return ""
+    tld = host.rsplit(".", 1)[-1]
+    if len(tld) != 2 or tld in _TLD_NEUTROS:
+        return ""
+    return {"uk": "GB"}.get(tld, tld.upper())
+
+
+def contradice_el_pais(url: str, pais_pedido: str) -> bool:
+    """El dominio declara un pais y NO es el que se pidio.
+
+    Se exige que AMBOS esten declarados: sin pais pedido no hay nada que
+    contradecir, y un dominio neutro no afirma nada.
+    """
+    if not pais_pedido:
+        return False
+    p = pais_del_dominio(url)
+    return bool(p) and p != pais_pedido
 
 
 def _liga_con_la_empresa(texto: str, empresa: str) -> bool:
@@ -551,9 +618,16 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         if not k:
             return
         puntuar(c)
+        c.fuentes.add(host_de_url(c.url) or c.proveedor)
         previo = candidatos.get(k)
         if previo is None or c.score > previo.score:
+            if previo is not None:
+                # Las fuentes se acumulan aunque gane el otro candidato: es
+                # justamente la señal de confirmacion.
+                c.fuentes |= previo.fuentes
             candidatos[k] = c
+        else:
+            previo.fuentes |= c.fuentes
 
     def leer_pagina(url: str, angulo: str = "sitio_directo") -> None:
         nonlocal fetches
@@ -678,6 +752,12 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         # tambien descarta medios de prensa, y la prensa es justamente uno de
         # los angulos que mas rinde para nombramientos.
         if filtering.motivo_descarte(url, "") == "red-social-o-buscador":
+            continue
+        # Un dominio que declara OTRO pais es de otra empresa homonima. Se
+        # descarta salvo que sea el sitio propio del prospecto, donde el
+        # dominio ya se verifico que es suyo.
+        if contradice_el_pais(url, ubi.pais) and not (
+                dominio and dominio in url.lower()):
             continue
         texto = it.get("titulo", "") + " " + it.get("snippet", "")
         propio = website.pertenece_a(url, empresa) >= 0.8 or (

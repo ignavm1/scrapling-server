@@ -141,6 +141,19 @@ _ABREVIATURAS_SOCIETARIAS = {
 # capturo es una frase, no una persona.
 MAX_LARGO_NOMBRE = 60
 
+# Un cargo escrito con barra de genero ("Director/a", "Gerente/a") es forma de
+# AVISO DE EMPLEO, no de alguien que ocupa el puesto. MEDIDO: "Director/a de
+# Estrategia Digital" entro como decisor de una empresa espanola en una busqueda
+# de Santiago -- eran dos defectos en un mismo candidato.
+_RX_CARGO_VACANTE = re.compile(
+    r"/a\b|\(a\)|/o\b|\bbuscamos\b|\bse busca\b|\bvacante\b|\bpostula\b|"
+    r"\bempleo\b|\bwe are hiring\b|\bhiring\b|\bjob\b", re.I)
+
+
+def es_cargo_de_vacante(cargo: str) -> bool:
+    """El cargo viene de un aviso de empleo en vez de una persona real."""
+    return bool(_RX_CARGO_VACANTE.search(cargo or ""))
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Patrones de extraccion
 # ─────────────────────────────────────────────────────────────────────────────
@@ -275,6 +288,11 @@ def _extraer_de(fragmentos: list[tuple[str, str]], url: str) -> list[dict]:
                 clave = clave_nombre(nombre)
                 if not clave or clave in vistos:
                     continue
+                # Un cargo de aviso de empleo no describe a nadie.
+                if es_cargo_de_vacante(cargo):
+                    continue
+                if es_el_nombre_de_la_empresa(nombre, url, empresa):
+                    continue
                 vistos.add(clave)
                 salida.append({
                     "person_name": nombre,
@@ -300,6 +318,28 @@ _RX_CARGO_INICIO = re.compile(r"^\s*(?i:" + _CARGO_ALT + r")\b")
 # comun (nombre, cargo) y el que mete una foto o un separador en el medio; mas
 # alla de eso se empieza a leer al miembro siguiente del equipo.
 MAX_BLOQUES_DE_DISTANCIA = 2
+
+
+def es_el_nombre_de_la_empresa(nombre: str, url: str, empresa: str = "") -> bool:
+    """El "nombre" es en realidad el de la empresa?
+
+    MEDIDO (2026-09-06) sobre 30 agencias: "Flama Creators" entro como decisor
+    de flamacreators.com, y encima se le construyo flama@flamacreators.com por
+    patron -- un email inventado sobre algo que no es un nombre.
+
+    Se compara contra el DOMINIO y contra el nombre declarado. No se rechaza
+    por parecido parcial: hay gente cuyo apellido esta en el nombre de su
+    empresa (y suele ser justo el fundador, que es a quien mas queremos).
+    """
+    kn = re.sub(r"[^a-z0-9]", "", sin_acentos(nombre or "").lower())
+    if not kn:
+        return False
+    host = host_de(url).split(".")[0]
+    kd = re.sub(r"[^a-z0-9]", "", sin_acentos(host).lower())
+    ke = re.sub(r"[^a-z0-9]", "", sin_acentos(empresa or "").lower())
+    # Igualdad, no contencion: "Bravo" dentro de "bravomarketing" es un
+    # apellido en el nombre de la empresa, y esa persona existe.
+    return bool(kn) and (kn == kd or (bool(ke) and kn == ke))
 
 
 def extraer_de_texto(texto: str, url: str) -> list[dict]:
@@ -338,6 +378,8 @@ def extraer_de_texto(texto: str, url: str) -> list[dict]:
             # El cargo se corta en el primer punto: el bloque suele seguir con
             # la bio ("Gerente General. Lidera la agencia desde 2018.").
             cargo = re.split(r"[.·|]", siguiente, 1)[0].strip()[:60]
+            if es_cargo_de_vacante(cargo) or es_el_nombre_de_la_empresa(bloque, url):
+                continue
             vistos.add(clave)
             salida.append({
                 "person_name": bloque,
