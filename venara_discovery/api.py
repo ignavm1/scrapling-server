@@ -421,10 +421,23 @@ def find_decision_maker(req: DecisionMakerRequest):
         "blocked_providers": diag["proveedores_bloqueados"],
         "diagnostics": diag,
     }
+    # `partial_search` viaja SIEMPRE: aunque hayamos encontrado al decisor, el
+    # operador necesita saber que la busqueda corrio degradada.
+    cuerpo["partial_search"] = bool(diag.get("busqueda_parcial"))
+
     if not candidatos:
         cuerpo["reason"] = diag.get("motivo_vacio", "no_publicado")
-        if diag["proveedores_bloqueados"]:
+        # `error` se ata al veredicto, NO a que algun proveedor haya bloqueado.
+        # Antes bastaba con que duckduckgo devolviera 403 para marcar error aun
+        # cuando bing habia atendido y traido corpus: el cliente reintentaba
+        # empresas que en realidad no publican a nadie. Ver decisor.resolver.
+        if cuerpo["reason"] == "providers_blocked":
             cuerpo["error"] = "providers_blocked"
             cuerpo["message"] = ("Los buscadores bloquearon las consultas; esto NO significa "
                                  "que la empresa no publique a su decisor.")
+        elif cuerpo["partial_search"]:
+            cuerpo["message"] = ("Busqueda degradada: " +
+                                 ", ".join(diag["proveedores_bloqueados"]) +
+                                 " bloquearon, pero otros proveedores si atendieron. "
+                                 "El veredicto vale; con proxy podria mejorar.")
     return cuerpo

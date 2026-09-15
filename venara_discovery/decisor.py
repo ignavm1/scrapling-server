@@ -864,7 +864,18 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         # presupuesto agotado a los 25s. No es que no publiquen -- es que los
         # proveedores agotaron el tiempo sin devolver nada, y por timeout no
         # quedan marcados como bloqueados.
-        if diag["proveedores_bloqueados"]:
+        #
+        # Un bloqueo PARCIAL no es un bloqueo. Medido el 2026-09-15 contra la
+        # base real: duckduckgo devolvia 403 y brave captcha, pero bing atendia
+        # con 200 y traia corpus, y aun asi TODAS las empresas salian con
+        # "providers_blocked". Es el mismo error que este bloque existe para
+        # evitar, pero al reves: manda a reintentar empresas sobre las que SI
+        # miramos, y esconde que el decisor no esta publicado.
+        #
+        # Solo es bloqueo cuando lo que bloquearon nos dejo sin nada que mirar.
+        # Si algun proveedor atendio (crudos) o entramos a alguna pagina
+        # (visitadas), miramos, y el vacio tiene otra explicacion.
+        if diag["proveedores_bloqueados"] and not crudos and not visitadas:
             motivo = "providers_blocked"
         elif presupuesto_agotado or (fetches and fallidos >= max(1, fetches // 2)):
             motivo = "sin_acceso"
@@ -873,6 +884,12 @@ def resolver(empresa: str, dominio: str = "", ubicacion: str = "",
         else:
             motivo = "no_publicado"
         diag["motivo_vacio"] = motivo
+
+    # La busqueda degradada se reporta SIEMPRE, haya o no candidatos: que bing
+    # haya salvado la corrida no borra que duckduckgo y brave nos bloquearon, y
+    # el operador necesita ese dato para decidir si vale reintentar con proxy.
+    # Va aparte del veredicto justamente para no volver a mezclarlos.
+    diag["busqueda_parcial"] = bool(diag["proveedores_bloqueados"]) and bool(crudos or visitadas)
 
     log.info("decisor '%s' -> %d candidatos (%d crudos, %d fetches, %d paginas) en %dms%s",
              empresa, len(ordenados), len(crudos), fetches, len(visitadas), diag["ms"],

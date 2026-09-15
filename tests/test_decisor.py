@@ -271,6 +271,47 @@ def test_control_positivo_sin_bloqueo_el_motivo_es_otro(monkeypatch):
     assert r["diagnostico"]["motivo_vacio"] != "providers_blocked"
 
 
+def test_un_bloqueo_parcial_no_se_reporta_como_bloqueo(monkeypatch):
+    """Regresion del 2026-09-15, medida contra la base real.
+
+    duckduckgo devolvia 403 y brave captcha, pero bing atendia con 200 y traia
+    corpus. Aun asi TODAS las empresas salian con `providers_blocked`, lo que
+    mandaba a reintentar empresas sobre las que SI habiamos mirado y escondia
+    que el decisor simplemente no esta publicado.
+
+    Con un SERP vacio y el sitio sin personas, el vacio es real: el motivo debe
+    hablar de lo que encontramos, no de quien nos bloqueo.
+    """
+    parcial = {"duckduckgo": "status-403", "brave": "captcha"}
+    vacio = "<html><body><div class='results'></div></body></html>"
+    _sin_red(monkeypatch, serp=vacio,
+             pagina="<html><body><p>Servicios</p></body></html>",
+             bloqueados=parcial)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+
+    assert r["candidatos"] == []
+    diag = r["diagnostico"]
+    # El bloqueo parcial se sigue reportando: no se pierde informacion.
+    assert diag["proveedores_bloqueados"], "el bloqueo parcial no puede perderse"
+    # Pero el veredicto NO es "no nos dejaron mirar", porque si miramos.
+    assert diag["motivo_vacio"] != "providers_blocked", diag
+    # Y queda la marca de que la busqueda corrio degradada.
+    assert diag["busqueda_parcial"] is True, diag
+
+
+def test_bloqueo_total_sigue_siendo_bloqueo(monkeypatch):
+    """El arreglo del bloqueo parcial no puede tapar el bloqueo de verdad."""
+    todos = {p.nombre: "captcha" for p in providers.activos()}
+    todos["sitio"] = "captcha"
+    _sin_red(monkeypatch, bloqueados=todos)
+    r = decisor.resolver(EMPRESA, DOMINIO, "Chile")
+
+    assert r["candidatos"] == []
+    assert r["diagnostico"]["motivo_vacio"] == "providers_blocked"
+    # Sin corpus no hubo busqueda degradada: directamente no hubo busqueda.
+    assert r["diagnostico"]["busqueda_parcial"] is False
+
+
 def test_una_empresa_vacia_no_dispara_ni_un_fetch(monkeypatch):
     llamadas = []
     _sin_red(monkeypatch, contador=llamadas)
