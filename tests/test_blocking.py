@@ -153,3 +153,58 @@ def test_el_corte_no_se_repite_ni_sigue_contando():
         salud.registrar_timeout("duckduckgo", "Timeout")
     assert salud.registrar_timeout("duckduckgo", "Timeout") is False
     assert salud.caidos() == {"duckduckgo": "Timeout"}
+
+
+# --- El proxy se aplica de verdad (2026-09-15) ------------------------------
+
+
+def test_el_proxy_se_aplica_de_verdad(monkeypatch):
+    """Guarda contra el no-op silencioso de `FetcherSession(proxy=...)`.
+
+    Scrapling 0.4.8 acepta el parametro singular a nivel sesion y lo IGNORA:
+    no lanza y no avisa. Durante toda la vida del repo /health reportaba
+    `"proxy": true` mientras las peticiones salian por la IP de casa.
+
+    Este test no sale a la red: verifica que `crear_sesion` pase el proxy por
+    la forma que Scrapling si honra (`proxies`, plural), que es lo unico que
+    se puede comprobar sin depender de un proxy real.
+    """
+    from venara_discovery import fetch as mod_fetch
+
+    capturado = {}
+
+    class SesionFalsa:
+        def __init__(self, **kwargs):
+            capturado.update(kwargs)
+
+    monkeypatch.setattr(mod_fetch, "FetcherSession", SesionFalsa)
+    monkeypatch.setattr(mod_fetch.config, "PROXY_URL", "http://usuario:clave@host:8080")
+
+    mod_fetch.crear_sesion()
+
+    assert "proxies" in capturado, (
+        "el proxy tiene que viajar como `proxies` (plural): el singular a nivel "
+        "sesion lo ignora Scrapling en silencio")
+    assert capturado["proxies"] == {
+        "http": "http://usuario:clave@host:8080",
+        "https": "http://usuario:clave@host:8080",
+    }
+
+
+def test_sin_proxy_no_se_inventa_uno(monkeypatch):
+    """Control negativo: sin PROXY_URL la sesion no lleva clave de proxy."""
+    from venara_discovery import fetch as mod_fetch
+
+    capturado = {}
+
+    class SesionFalsa:
+        def __init__(self, **kwargs):
+            capturado.update(kwargs)
+
+    monkeypatch.setattr(mod_fetch, "FetcherSession", SesionFalsa)
+    monkeypatch.setattr(mod_fetch.config, "PROXY_URL", None)
+
+    mod_fetch.crear_sesion()
+
+    assert "proxies" not in capturado
+    assert "proxy" not in capturado

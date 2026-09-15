@@ -1,12 +1,44 @@
 """Configuracion central. Un solo lugar donde mirar que se puede tocar sin leer codigo."""
 from __future__ import annotations
 import os
+from pathlib import Path
 
-# 6.1.0 -- resolutor de decisor (empresa -> persona) y canal personas.
+# 6.2.0 -- cortacircuito por timeout, bloqueo parcial, y .env local.
 # El bump no es cosmetico: /health es la unica forma de saber QUE codigo esta
 # corriendo en Render, y sin cambiar este numero un deploy que no bajo se ve
 # igual que uno que si. Ya paso en la 5.0.0, por eso existe la convencion.
-VERSION = "6.1.0"
+VERSION = "6.2.0"
+
+
+def _cargar_env_local() -> None:
+    """Lee un `.env` junto al repo, sin pisar variables que ya existen.
+
+    Por que a mano y no python-dotenv: este repo pinea dependencias a proposito
+    y una lectura de KEY=VALUE no justifica sumar una.
+
+    Por que existe: el server corre bajo pm2 en la maquina de casa, donde no
+    hay panel para setear variables como en Render. Sin esto, poner PROXY_URL
+    obligaba a exportarla en la sesion que lanza pm2 y a recordar hacerlo
+    despues de cada reinicio de la PC. El entorno real SIEMPRE gana sobre el
+    archivo, para que Render y Docker sigan mandando ellos.
+    """
+    ruta = Path(__file__).resolve().parent.parent / ".env"
+    try:
+        contenido = ruta.read_text(encoding="utf-8")
+    except (FileNotFoundError, NotADirectoryError, PermissionError, UnicodeDecodeError):
+        return
+    for linea in contenido.splitlines():
+        linea = linea.strip()
+        if not linea or linea.startswith("#") or "=" not in linea:
+            continue
+        clave, _, valor = linea.partition("=")
+        clave = clave.strip()
+        if not clave or clave in os.environ:
+            continue
+        os.environ[clave] = valor.strip().strip("'\"")
+
+
+_cargar_env_local()
 
 # ── Red ──────────────────────────────────────────────────────────────────────
 PROXY_URL = os.environ.get("PROXY_URL") or None

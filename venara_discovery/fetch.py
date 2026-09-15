@@ -27,8 +27,28 @@ log = logging.getLogger(__name__)
 
 
 def crear_sesion():
+    """Sesion de fetch, con proxy si hay uno configurado.
+
+    OJO CON EL NOMBRE DEL PARAMETRO. Scrapling 0.4.8 acepta `proxy` y `proxies`
+    en `FetcherSession.__init__`, pero el SINGULAR a nivel sesion se ignora en
+    silencio: no lanza, no avisa, y las peticiones salen por la IP de la casa.
+
+    Verificado el 2026-09-15 apuntando a 127.0.0.1:9 (discard port, no escucha
+    nadie). Si el proxy se estuviera usando, todo fetch tiene que fallar:
+
+        FetcherSession(proxy=MUERTO)      -> HTTP 200   <- lo ignoraba
+        FetcherSession(proxies={..})      -> ConnectionError
+        sesion.get(url, proxy=MUERTO)     -> ConnectionError
+
+    Esto importa mas que un detalle de API: el repo entero decia tener soporte
+    de proxy, /health reportaba `"proxy": true`, y las peticiones seguian
+    saliendo sin proxy. Alguien podia pagar un proxy residencial y no obtener
+    nada. Ver test_el_proxy_se_aplica_de_verdad.
+    """
     if config.PROXY_URL:
-        return FetcherSession(impersonate="chrome", proxy=config.PROXY_URL)
+        return FetcherSession(impersonate="chrome",
+                              proxies={"http": config.PROXY_URL,
+                                       "https": config.PROXY_URL})
     return FetcherSession(impersonate="chrome")
 
 

@@ -5,3 +5,9 @@ ruvector.db
 
 # Herramientas locales, no del proyecto
 .claude-flow/
+
+# Credenciales locales. El .env lleva PROXY_URL con usuario y clave embebidos,
+# y config.py lo carga si existe. Nunca se commitea.
+.env
+.env.*
+!.env.example
