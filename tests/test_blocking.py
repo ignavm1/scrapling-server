@@ -98,3 +98,58 @@ def test_las_paginas_buenas_tienen_muchas_mas_anclas_que_la_bloqueada():
 
 def test_marcador_final():
     print("\nBLOCKING VERIFICADO")
+
+
+# --- Cortacircuito por timeout (2026-09-15) ---------------------------------
+#
+# Un proveedor que no CONTESTA no es lo mismo que uno que nos RECHAZA, y hasta
+# esta fecha solo el segundo se marcaba. Scrapling reintenta 3 veces por fetch,
+# asi que duckduckgo caido se comia ~18s de los 25 del presupuesto en cada
+# angulo, y la empresa terminaba en `sin_acceso` sin que nadie hubiera mirado.
+
+from venara_discovery.fetch import SaludProveedores  # noqa: E402
+from venara_discovery import config  # noqa: E402
+
+
+def test_un_timeout_suelto_no_tumba_al_proveedor():
+    """Una falla de red aislada no puede apagar un motor que si funciona."""
+    salud = SaludProveedores()
+    corto = salud.registrar_timeout("duckduckgo", "Timeout")
+    assert corto is False
+    assert salud.esta_caido("duckduckgo") == ""
+
+
+def test_dos_timeouts_seguidos_sacan_al_proveedor_de_la_busqueda():
+    salud = SaludProveedores()
+    for _ in range(config.MAX_TIMEOUTS_PROVEEDOR):
+        corto = salud.registrar_timeout("duckduckgo", "Timeout")
+    assert corto is True
+    assert salud.esta_caido("duckduckgo") == "Timeout"
+    assert "duckduckgo" in salud.caidos()
+
+
+def test_caido_y_bloqueado_no_se_mezclan():
+    """El que no contesta y el que nos rechaza se arreglan en lugares distintos.
+
+    Mezclarlos es el fallo que este repo documenta como el mas caro (F1/F4):
+    "no pudimos llegar" pide mirar la red, "nos rechazaron" pide proxy.
+    """
+    salud = SaludProveedores()
+    salud.marcar_bloqueado("brave", "captcha")
+    for _ in range(config.MAX_TIMEOUTS_PROVEEDOR):
+        salud.registrar_timeout("duckduckgo", "Timeout")
+
+    assert salud.resumen() == {"brave": "captcha"}, "un caido no puede figurar como bloqueado"
+    assert salud.caidos() == {"duckduckgo": "Timeout"}, "un bloqueado no puede figurar como caido"
+    # Y ninguno contamina al otro proveedor.
+    assert salud.esta_caido("brave") == ""
+    assert salud.esta_bloqueado("duckduckgo") == ""
+
+
+def test_el_corte_no_se_repite_ni_sigue_contando():
+    """Una vez caido, no vuelve a loguear ni a "cortar" en cada fallo posterior."""
+    salud = SaludProveedores()
+    for _ in range(config.MAX_TIMEOUTS_PROVEEDOR):
+        salud.registrar_timeout("duckduckgo", "Timeout")
+    assert salud.registrar_timeout("duckduckgo", "Timeout") is False
+    assert salud.caidos() == {"duckduckgo": "Timeout"}

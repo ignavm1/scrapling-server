@@ -23,6 +23,18 @@ MAX_CONCURRENCY = int(os.environ.get("MAX_CONCURRENCY", "6"))
 # sistema se autobloquea y despues reporta "el nicho no tiene resultados".
 PROVIDER_COOLDOWN_S = float(os.environ.get("PROVIDER_COOLDOWN_S", "1.2"))
 
+# Timeouts consecutivos que dejan a un proveedor fuera de UNA busqueda.
+# Medido el 2026-09-15: duckduckgo no conectaba desde el host de casa y
+# Scrapling reintenta 3 veces por fetch, asi que cada intento costaba el
+# timeout por tres. Con el presupuesto del resolutor en 25s, un solo proveedor
+# muerto se comia ~18s en CADA angulo y casi todas las empresas terminaban en
+# `sin_acceso` sin que nadie hubiera mirado.
+#
+# Es 2 y no 1 porque un timeout suelto puede ser la red del momento; dos
+# seguidos ya son el proveedor. No es un bloqueo: se cuenta aparte, ver
+# SaludProveedores.
+MAX_TIMEOUTS_PROVEEDOR = int(os.environ.get("MAX_TIMEOUTS_PROVEEDOR", "2"))
+
 # Techo de fetches por busqueda. Con 5 estrategias y 4 proveedores el producto
 # da 20, y dispararlos todos hace dos danos a la vez: revienta el presupuesto de
 # tiempo y provoca el captcha que despues nos deja sin ninguna fuente.

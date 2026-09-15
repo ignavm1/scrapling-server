@@ -906,11 +906,16 @@ def _diagnostico(plan, por_proveedor, salud, crudos, fetches, paginas, cands,
     este vacio -- no hubo nada bloqueado porque no se pidio nada.
     """
     bloqueados = salud.resumen()
+    # Los caidos viajan aparte de los bloqueados: "nos rechazaron" pide proxy o
+    # esperar, "no pudimos llegar" pide mirar la red. Juntarlos fue el error que
+    # este repo documenta como el mas caro (F1/F4).
+    caidos = salud.caidos()
     return {
         "angulos": [a.nombre for a in plan],
         "queries": [a.query for a in plan],
         "proveedores_ok": por_proveedor,
         "proveedores_bloqueados": bloqueados,
+        "proveedores_caidos": caidos,
         "crudos": crudos,
         "fetches": fetches,
         "fetches_descartados_por_techo": descartados_por_techo,
@@ -918,5 +923,5 @@ def _diagnostico(plan, por_proveedor, salud, crudos, fetches, paginas, cands,
         "candidatos": cands,
         "busco_en_internet": busco,
         "ms": int((time.monotonic() - t0) * 1000),
-        "completo": (bool(por_proveedor) and not bloqueados) if busco else True,
+        "completo": (bool(por_proveedor) and not bloqueados and not caidos) if busco else True,
     }
