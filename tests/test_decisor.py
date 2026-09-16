@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from venara_discovery import api, config, decisor, extraction, personas, providers, website
+from venara_discovery.fetch import SaludProveedores
 from venara_discovery.location import interpretar
 
 FIX = pathlib.Path(__file__).parent / "fixtures"
@@ -962,3 +963,112 @@ def test_no_gasta_la_busqueda_si_el_decisor_ya_trae_perfil(monkeypatch):
     monkeypatch.setattr(decisor, "obtener", _obtener)
     decisor.resolver(EMPRESA, "", "Chile")
     assert not any("Matias" in u or "Matias%20Bravo" in u for u in consultas), consultas
+
+
+def test_el_sitemap_encuentra_la_pagina_que_la_home_no_enlaza(monkeypatch):
+    """Medido el 2026-09-15: hay sitios cuya home no enlaza al equipo.
+
+    ibo.pe no lo enlazaba de forma detectable, y el sitemap si lo declara. El
+    sitemap es el inventario que la empresa publica de si misma, cuesta un
+    fetch y no pasa por ningun buscador, que es justo lo que no tenemos.
+    """
+    home = "<html><body><a href='/servicios'>Servicios</a></body></html>"
+    sitemap = ("<?xml version='1.0'?><urlset>"
+               "<loc>https://empresa.com/servicios</loc>"
+               "<loc>https://empresa.com/nosotros</loc>"
+               "</urlset>")
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        if url.endswith("/sitemap.xml"):
+            return _Rta(html=sitemap)
+        return _Rta(html=home)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    urls, fetches = decisor._paginas_del_sitio("empresa.com", SaludProveedores())
+
+    assert urls == ["https://empresa.com/nosotros"]
+    assert fetches == 2, "un fetch a la home y uno al sitemap"
+
+
+def test_sin_pagina_de_equipo_el_sitemap_lo_confirma(monkeypatch):
+    """El caso negativo vale tanto como el positivo.
+
+    agenciameca.com.ar declara UNA sola pagina en todo su sitio y
+    fullpublicidad.cl declara 26, todas de servicios. Saberlo convierte un
+    "reintentar con proxy" en un "esta empresa no publica a nadie", y se deja
+    de gastar en ella.
+    """
+    home = "<html><body><a href='/contacto'>Contacto</a></body></html>"
+    sitemap = ("<?xml version='1.0'?><urlset>"
+               "<loc>https://empresa.com/</loc>"
+               "<loc>https://empresa.com/googleads.php</loc>"
+               "</urlset>")
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        return _Rta(html=sitemap if url.endswith("/sitemap.xml") else home)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    urls, fetches = decisor._paginas_del_sitio("empresa.com", SaludProveedores())
+
+    assert urls == []
+    assert fetches == 2
+
+
+def test_el_sitemap_no_se_pide_si_la_home_ya_enlazo(monkeypatch):
+    """No gastar un fetch cuando la home ya resolvio: es el caso comun."""
+    home = "<html><body><a href='/nosotros'>Nuestro equipo</a></body></html>"
+    pedidos = []
+
+    def _obtener(url, proveedor, salud, timeout=None):
+        pedidos.append(url)
+        return _Rta(html=home)
+
+    monkeypatch.setattr(decisor, "obtener", _obtener)
+    urls, fetches = decisor._paginas_del_sitio("empresa.com", SaludProveedores())
+
+    assert urls == ["https://empresa.com/nosotros"]
+    assert fetches == 1
+    assert not any("sitemap" in u for u in pedidos), "no debe pedir el sitemap"
+
+
+def test_el_sitemap_no_confunde_un_articulo_con_la_pagina_de_equipo():
+    """Regresion del 2026-09-15: el falso positivo que costo mas caro.
+
+    `/equipo-interno-vs-agencia-marketing/` es una nota de blog que compara
+    tener equipo interno contra contratar agencia. Contiene "equipo", paso el
+    filtro de paginas de personas, y el extractor devolvio un decisor llamado
+    "Departamento In-House" con cargo "Partner (Agencia)" y confianza ALTA.
+
+    Un falso positivo es peor que no encontrar nada: termina en una nota de
+    conexion dirigida a alguien que no existe, enviada a nombre del cliente.
+
+    Desde la home ese enlace se descarta por su texto de ancla. Desde el
+    sitemap no hay texto, solo la URL, y por eso hace falta este filtro.
+    """
+    articulos = [
+        "https://creallo.pe/equipo-interno-vs-agencia-marketing/",
+        "https://x.cl/blog/quienes-somos",
+        "https://x.cl/2026/09/el-equipo-que-hace-magia",
+        "https://x.cl/noticias/nuestro-equipo-crece",
+    ]
+    for u in articulos:
+        assert decisor._parece_articulo(u) is True, u
+
+
+def test_el_filtro_de_articulos_no_se_come_las_paginas_de_equipo_reales():
+    """Control positivo: sin esto, el filtro podria rechazar todo y "pasar".
+
+    `conoce-a-nuestro-equipo` tiene 3 guiones y es una pagina legitima. La
+    primera version cortaba en 3 y la rechazaba; por eso el corte va en 4.
+    """
+    reales = [
+        "https://ibo.pe/nosotros",
+        "https://limarank.pe/nosotros/",
+        "https://cenesape.com/nosotros.html",
+        "https://x.cl/nuestro-equipo",
+        "https://x.cl/conoce-a-nuestro-equipo",
+        "https://x.cl/sobre-nosotros",
+        "https://x.cl/equipo",
+    ]
+    for u in reales:
+        assert decisor._parece_articulo(u) is False, u

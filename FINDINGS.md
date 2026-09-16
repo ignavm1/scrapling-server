@@ -686,3 +686,56 @@ puro levanta el mismo Chromium sin problema en la misma maquina. Es el
 contexto persistente, no el navegador. `StealthyFetcher` ademas necesita
 camoufox, que no viene con `scrapling[fetchers]`. Si algun dia hace falta
 fetch por navegador, el camino corto es Playwright directo.
+
+---
+
+## F28 — El sitemap sirve, y casi mete un decisor inventado. 2026-09-15
+
+Con los buscadores cerrados (F27), el unico camino gratis que queda es el
+sitio propio. La home no siempre enlaza al equipo, asi que se sumo el
+**sitemap.xml** como respaldo: es el inventario que la empresa declara de si
+misma, cuesta un fetch y no pasa por ningun buscador.
+
+### Lo que rinde, y no es lo que parece
+
+De cuatro empresas sin pagina de equipo detectable desde la home:
+
+| Empresa | Sitemap | Conclusion |
+|---|---|---|
+| ibo.pe | declara `/nosotros` | la encuentra sin buscador |
+| agenciameca.com.ar | **1 sola pagina** en todo el sitio | no publica a nadie |
+| fullpublicidad.cl | 26 paginas, todas de servicios | no publica a nadie |
+| cenesape.com | `/nosotros.html`, 5057 chars, cero cargos | no publica a nadie |
+
+**El valor principal es el caso negativo, no el positivo.** Saber que una
+empresa no tiene pagina de equipo convierte un `sin_acceso` ambiguo (que
+invita a reintentar con proxy) en un "no publica" definitivo, sobre el que se
+deja de gastar. En una base de 1300 empresas eso es la diferencia entre pagar
+por reintentos infinitos y saber cuando parar.
+
+### El falso positivo que casi se publica
+
+Primera medicion con el sitemap activo: 3 de 6 empresas con decisor, contra 2
+antes. Parecia una mejora del 50%. El tercero era:
+
+    alta   Departamento In-House   Partner (Agencia)
+           https://creallo.pe/equipo-interno-vs-agencia-marketing/
+
+Una **nota de blog** que compara tener equipo interno contra contratar
+agencia. La URL contiene "equipo", paso el filtro, y el extractor devolvio un
+departamento como si fuera una persona. Con confianza ALTA.
+
+La causa es una diferencia que no se ve hasta que muerde: **desde la home un
+enlace trae texto de ancla y desde el sitemap no.** "Equipo interno vs
+agencia" se descarta leyendo el texto; `/equipo-interno-vs-agencia-marketing/`
+solo se puede juzgar por la URL.
+
+Se agrego `_parece_articulo()`: descarta rutas bajo secciones de blog, con
+fecha en la ruta, o con slug de 4 guiones o mas (un slug de seccion nombra una
+cosa, el de un articulo es una frase). El corte va en 4 y no en 3 porque
+`conoce-a-nuestro-equipo` tiene 3 y es legitima.
+
+Con el filtro: **2 de 6, sin invenciones.** La medida honesta es esa, no la de
+3 que incluia a una persona que no existe. Un falso positivo no es medio
+acierto: termina en una nota de conexion dirigida a alguien inexistente,
+enviada a nombre del cliente.

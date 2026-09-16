@@ -344,7 +344,123 @@ def _paginas_del_sitio(dominio: str, salud: SaludProveedores) -> tuple[list[str]
         urls.append(url)
         if len(urls) >= config.DECISOR_MAX_PAGINAS:
             break
+
+    # La home no siempre enlaza al equipo: hay menus armados por JavaScript y
+    # sitios donde la pagina existe pero cuelga de otra seccion. El sitemap es
+    # el inventario que la empresa declara de si misma, cuesta un fetch, y no
+    # pasa por ningun buscador.
+    #
+    # MEDIDO (2026-09-15): de cuatro empresas sin pagina de equipo detectable
+    # desde la home, el sitemap la encontro en ibo.pe (`/nosotros`) y probo que
+    # agenciameca.com.ar tiene UNA sola pagina en todo el sitio y
+    # fullpublicidad.cl tiene 26, todas de servicios. Ese segundo caso vale
+    # tanto como el primero: convierte un "reintentar con proxy" en un "esta
+    # empresa no publica a nadie", que se deja de gastar.
+    if not urls:
+        del_sitemap, gasto = _paginas_del_sitemap(dominio, salud, vistas)
+        urls.extend(del_sitemap)
+        return urls, 1 + gasto
+
     return urls, 1
+
+
+_RX_LOC = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
+
+# Secciones que publican articulos, no al equipo.
+_RX_SECCION_BLOG = re.compile(
+    r"/(blog|noticias|novedades|articulos?|posts?|prensa|news|categoria|category|tag)/", re.I)
+# Una fecha en la ruta es firma de articulo: /2026/09/...
+_RX_FECHA_EN_RUTA = re.compile(r"/(19|20)\d{2}(/\d{1,2})?/")
+
+
+def _parece_articulo(url: str) -> bool:
+    """True si la URL tiene forma de nota de blog y no de pagina de equipo.
+
+    Existe porque desde el sitemap no hay texto de ancla con que juzgar. Se
+    mira la RUTA, no el dominio: un slug largo y con muchos guiones es un
+    titulo, y un titulo es un articulo.
+
+    El caso que lo motivo: `/equipo-interno-vs-agencia-marketing/` contiene
+    "equipo" y pasaba el filtro de paginas de personas.
+    """
+    ruta = urlsplit(url).path or "/"
+    if _RX_SECCION_BLOG.search(ruta) or _RX_FECHA_EN_RUTA.search(ruta):
+        return True
+    ultimo = [p for p in ruta.split("/") if p]
+    if not ultimo:
+        return False
+    slug = ultimo[-1].rsplit(".", 1)[0]
+    # Un slug de seccion nombra una cosa; el de un articulo es una frase.
+    #
+    #   nuestro-equipo                        1 guion   seccion
+    #   conoce-a-nuestro-equipo               3 guiones seccion
+    #   equipo-interno-vs-agencia-marketing   4 guiones articulo
+    #
+    # El corte va en 4 y no en 3: con 3 se rechazaba "conoce-a-nuestro-equipo",
+    # que es una pagina de equipo legitima. Verificado contra los dos casos.
+    return slug.count("-") >= 4
+
+
+def _paginas_del_sitemap(dominio: str, salud: SaludProveedores,
+                         vistas: set[str]) -> tuple[list[str], int]:
+    """Paginas de equipo segun el sitemap. Devuelve (urls, fetches).
+
+    Solo se llama cuando la home no enlazo ninguna, porque cuesta fetches y en
+    la mayoria de los sitios la home alcanza.
+
+    Sigue UN nivel de indice (`<sitemapindex>`) y no mas: un sitemap de blog
+    con miles de entradas no tiene la pagina de equipo mas adentro, y bajar
+    recursivamente gasta el presupuesto que le falta al resto del plan.
+    """
+    if not dominio:
+        return [], 0
+    base = "https://" + dominio
+    fetches = 0
+    pendientes = [base + "/sitemap.xml"]
+    candidatas: list[str] = []
+    indices_seguidos = 0
+
+    while pendientes and fetches < 3:
+        r = obtener(pendientes.pop(0), "sitio", salud,
+                    timeout=config.DECISOR_FETCH_TIMEOUT)
+        fetches += 1
+        cuerpo = r.html or ""
+        if "<urlset" not in cuerpo.lower() and "<sitemapindex" not in cuerpo.lower():
+            continue
+
+        locs = [m.group(1) for m in _RX_LOC.finditer(cuerpo)]
+        es_indice = "<sitemapindex" in cuerpo.lower()
+        for loc in locs:
+            host = urlsplit(loc).hostname or ""
+            if not (host == dominio or host.endswith("." + dominio)):
+                continue
+            if es_indice:
+                if indices_seguidos < 2 and loc.lower().endswith(".xml"):
+                    pendientes.append(loc)
+                    indices_seguidos += 1
+                continue
+            url = loc.split("#")[0]
+            if url in vistas:
+                continue
+            # Desde el sitemap NO hay texto de ancla, y esa diferencia importa.
+            # Un enlace en la home que dice "Equipo interno vs agencia" se
+            # descarta por su texto; en el sitemap solo se ve la URL, y
+            # `/equipo-interno-vs-agencia-marketing/` contiene "equipo" y pasa.
+            #
+            # MEDIDO (2026-09-15): ese caso exacto produjo un decisor llamado
+            # "Departamento In-House" con cargo "Partner (Agencia)", con
+            # confianza ALTA. Un falso positivo es peor que no encontrar nada:
+            # termina en una nota de conexion dirigida a alguien que no existe.
+            if _parece_articulo(url):
+                continue
+            if not personas.es_pagina_de_personas(url, ""):
+                continue
+            vistas.add(url)
+            candidatas.append(url)
+            if len(candidatas) >= config.DECISOR_MAX_PAGINAS:
+                return candidatas, fetches
+
+    return candidatas, fetches
 
 
 def _paginas_de_contacto(dominio: str, salud: SaludProveedores) -> list[str]:
