@@ -633,3 +633,56 @@ silencio y el veredicto mentia. Es F1/F4 otra vez, entrando por otra puerta.
 
 Se agrego el motivo **`sin_acceso`** y se cuentan los fetches fallidos. Un
 veredicto de "no publica" ahora exige que de verdad se haya podido mirar.
+
+---
+
+## F27 — Un navegador real NO desbloquea a los buscadores. Medido, 2026-09-15
+
+La hipotesis era razonable y salio que no: si el HTTP plano se come captchas y
+403, un navegador real deberia pasar. Se probo, y en algunos casos **empeora**.
+
+Contexto: desde una conexion domestica en LATAM, el unico proveedor que
+atendia era bing. Antes de pagar un proxy residencial se midio si la via
+gratis (navegador) alcanzaba.
+
+### La medicion
+
+Misma maquina, misma query, mismo minuto. "curl" es HTTP plano con user-agent
+de Chrome; "navegador" es Chromium real via Playwright, headless.
+
+| Proveedor | curl | navegador real |
+|---|---|---|
+| bing | 200 OK | 200 OK |
+| mojeek | 200, pero el body es `<title>Captcha</title>` | **403, 350 bytes** |
+| brave | 429 | 429 + captcha |
+| duckduckgo | timeout TCP, HTTP 000 a los 20s | `ERR_CONNECTION_TIMED_OUT` |
+| startpage | 200, cero enlaces externos | 200, **cero resultados** incluso con `networkidle` |
+
+Tres conclusiones que ahorran repetir el experimento:
+
+1. **El navegador no compra nada.** mojeek paso de servir un captcha a
+   rechazar con 403: el perfil de automatizacion es mas detectable que un
+   curl con UA de Chrome, no menos.
+2. **duckduckgo no es un bloqueo de bot, es de red.** Falla en el handshake
+   TCP, antes de cualquier HTTP. Se descarto DNS: Cloudflare (1.1.1.1) y
+   Google (8.8.8.8) resuelven la misma IP, asi que esa es la real. Ningun
+   cambio de cliente arregla eso.
+3. **Un 200 no es un resultado.** mojeek y startpage devuelven 200 con una
+   pagina de captcha o de consentimiento. Contar solo el status habria dado
+   "tres proveedores disponibles" cuando en realidad hay uno.
+
+### Lo que si sirve, y es gratis
+
+El camino del sitio propio (`_paginas_del_sitio`, fase 1 del resolutor) no
+depende de ningun buscador y es de donde salieron TODOS los decisores reales
+de la medicion: `limarank.pe/nosotros/` e `ibo.pe/nosotros`. Invertir ahi rinde
+mas que pelear con los buscadores.
+
+### Nota aparte: los fetchers de navegador de Scrapling no arrancan en Windows
+
+`StealthyFetcher` y `DynamicFetcher` fallan con
+`BrowserType.launch_persistent_context: spawn UNKNOWN`, mientras que Playwright
+puro levanta el mismo Chromium sin problema en la misma maquina. Es el
+contexto persistente, no el navegador. `StealthyFetcher` ademas necesita
+camoufox, que no viene con `scrapling[fetchers]`. Si algun dia hace falta
+fetch por navegador, el camino corto es Playwright directo.
